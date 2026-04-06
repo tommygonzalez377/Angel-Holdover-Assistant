@@ -42,6 +42,10 @@
       font-weight: 400;
       width: 100%;
       text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
     }
     .theatre-btn.active {
       background: #1a1a2e;
@@ -50,6 +54,15 @@
     }
     .theatre-btn.error {
       opacity: 0.55;
+    }
+    .btn-city {
+      font-size: 10px;
+      font-weight: 400;
+      opacity: 0.65;
+      line-height: 1.2;
+    }
+    .theatre-btn.active .btn-city {
+      opacity: 0.8;
     }
 
     /* Main table */
@@ -515,7 +528,12 @@ function renderTabs() {
       (t.status !== "ok" ? " error" : "");
 
     // Show booking sheet theatre name, fallback to master list venue
-    btn.textContent = t.theatre || t.ml_venue || `Unit ${t.unit}`;
+    const displayName = t.theatre || t.ml_venue || `Unit ${t.unit}`;
+    // City/state: prefer parenthetical from ml_venue (e.g. "Cinemark Foo (Conway, AR)")
+    // then fall back to the booking city field
+    const mlCityMatch = (t.ml_venue || "").match(/\(([^)]+)\)\s*$/);
+    const cityDisplay = mlCityMatch ? mlCityMatch[1] : (t.city || "");
+    btn.innerHTML = `<span class="btn-name">${displayName}</span>${cityDisplay ? `<span class="btn-city">${cityDisplay}</span>` : ""}`;
     btn.title = t.status !== "ok" ? (t.error || t.status) : t.ml_venue;
 
     btn.addEventListener("click", () => {
@@ -808,7 +826,8 @@ function handleSearch(query) {
 
   let visible = 0;
   btns.forEach((btn, i) => {
-    const name = (ALL_THEATRES[i].theatre || ALL_THEATRES[i].ml_venue || "").toLowerCase();
+    const t = ALL_THEATRES[i];
+    const name = ((t.theatre || t.ml_venue || "") + " " + (t.city || "")).toLowerCase();
     const match = !q || name.includes(q);
     // Toggle hidden on the wrapper (parent) so the Comscore link hides too
     const wrap = btn.closest(".theatre-tab-wrap") || btn;

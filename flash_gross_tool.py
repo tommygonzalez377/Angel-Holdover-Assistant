@@ -1582,6 +1582,7 @@ def pull_all_theatre_data(
             "unit":           unit,
             "theatre":        theatre,
             "ml_venue":       ml_venue,
+            "city":           city,
             "attraction":     attraction,
             "booking_action": action,
             "buyer":          buyer,
