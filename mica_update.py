@@ -496,6 +496,66 @@ def parse_booking_csv(path: Path) -> list[dict]:
             l.strip().lower() in ('theatre #', 'theater #') for l in _lines_sample[:4]
         )
         log(f"  [debug] header_idx={header_idx} max_tabs={_max_tabs} max_commas={_max_commas} comscore={_is_comscore_hdr}")
+
+        # ── Cinemark "Theater # / Name (City, State)" TSV format ─────────────
+        # Header row starts with "Theater #\t...".  Preamble lines before the
+        # header (e.g. "David", "Solo Mio") are the film/production names.
+        # Two duplicate "Regular" columns → one per film.
+        # Values: "Final" → Final, "Clean"/any non-dash → Hold, "-"/blank → skip.
+        _first_content_line = next((l.rstrip('\n\r') for l in content.splitlines() if l.strip()), "")
+        _is_theater_hash_tsv = (
+            _first_content_line.split('\t')[0].strip().lower() in ('theater #', 'theatre #')
+            and '\t' in _first_content_line
+        )
+        if _is_theater_hash_tsv:
+            _preamble_films = [l.strip() for l in lines[:header_idx] if l.strip()]
+            _tsv_raw_headers = [c.strip() for c in _first_content_line.split('\t')]
+            # Deduplicate column names (two "Regular" → "Regular", "Regular.1")
+            _seen_th = {}
+            _deduped_th = []
+            for _h in _tsv_raw_headers:
+                _hl = _h.lower()
+                if _hl in _seen_th:
+                    _seen_th[_hl] += 1
+                    _deduped_th.append(f"{_h}.{_seen_th[_hl]}")
+                else:
+                    _seen_th[_hl] = 0
+                    _deduped_th.append(_h)
+            # Film columns = anything not in the standard info set
+            _INFO_COLS_TH = {'theater #', 'theatre #', 'name (city, state)', 'dma',
+                             'screens', 'contact', 'chain', 'circuit', 'branch'}
+            _film_col_idxs = [i for i, h in enumerate(_deduped_th)
+                               if h.split('.')[0].strip().lower() not in _INFO_COLS_TH]
+            log(f"  [1b-tsv] preamble_films={_preamble_films} film_col_idxs={_film_col_idxs} headers={_deduped_th}")
+            _city_pat_th = _re_pbc.compile(r'\(([^,)]+),\s*[A-Z]{2}\)\s*$')
+            for _dl in content.splitlines()[1:]:
+                if not _dl.strip():
+                    continue
+                _cells = [c.strip() for c in _dl.split('\t')]
+                _raw_nm = _cells[1].strip() if len(_cells) > 1 else ""
+                _cm = _city_pat_th.search(_raw_nm)
+                _city_th = _cm.group(1).strip() if _cm else ""
+                _theatre_th = _city_pat_th.sub("", _raw_nm).strip()
+                if not _theatre_th:
+                    continue
+                for _fi, _ci in enumerate(_film_col_idxs):
+                    _val = _cells[_ci].strip().lower() if _ci < len(_cells) else ""
+                    _film_th = _preamble_films[_fi] if _fi < len(_preamble_films) else ""
+                    if _val == 'final':
+                        _a_th = 'Final'
+                    elif _val and _val not in ('-',):
+                        _a_th = 'Hold'   # "clean" = clean hold
+                    else:
+                        continue         # "-" or blank = not booked
+                    _phrase_th = "" if _val in ('final', 'clean') else _val
+                    _st_th = get_screening_type(_phrase_th) if _a_th == 'Hold' else None
+                    results.append({"theatre": _theatre_th, "city": _city_th,
+                                    "action": _a_th, "film": _film_th,
+                                    "phrase": _phrase_th, "screening_type": _st_th})
+            log(f"  [1b-tsv] parsed {len(results)} results")
+            return results
+        # ── End Cinemark Theater # TSV ────────────────────────────────────────
+
         _opl_rows = _parse_one_per_line_to_dicts(content)
         log(f"  [debug] one-per-line returned {len(_opl_rows)} rows; first values: {[l.strip() for l in content.splitlines() if l.strip()][:5]}")
         if (_max_tabs < 2 and _max_commas < 2) or _is_comscore_hdr:
