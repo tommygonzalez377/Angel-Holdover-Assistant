@@ -815,12 +815,15 @@ def load_final_locations(csv_path: str) -> list[dict]:
                         print(f"  [1b-opl] not enough headers or data", flush=True)
                 # ── End one-per-line variant ─────────────────────────────────
 
-                # Rename Theater # → Unit, 2nd col → Theatre
+                # Rename Theater # → _cinemark_id (NOT "Unit" — Cinemark's internal
+                # theater numbers are NOT Comscore/Rentrak IDs; using them as unit keys
+                # causes wrong-theatre lookups, e.g. #348 → AMC Montgomery 16).
+                # Name-based lookup (_name_lookup_fallback) handles these correctly.
                 _rename_1b = {}
                 for _c in _cand.columns:
                     _cl = _c.lower().strip()
                     if _cl in ("theater #", "theatre #"):
-                        _rename_1b[_c] = "Unit"
+                        _rename_1b[_c] = "_cinemark_id"
                 # Rename the venue-name column → Theatre
                 # Accept: starts with "name", "theatre", "theater", "location" OR use col[1]
                 _theatre_col_found_1b = False
