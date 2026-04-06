@@ -633,7 +633,7 @@ def parse_booking_csv(path: Path) -> list[dict]:
         if _is_theatre_hdr:
             _preamble_films_th = [l.strip() for l in lines[:header_idx] if l.strip()]
             _CITY_ST_th = _re_pbc.compile(r'\([^,)]+,\s*[A-Z]{2}\)\s*$')
-            _CITY_EX_th = _re_pbc.compile(r'\(([^,)]+),\s*[A-Z]{2}\)\s*$')
+            _CITY_EX_th = _re_pbc.compile(r'\(([^,)]+,\s*[A-Z]{2})\)\s*$')
             _all_th = [l.strip() for l in content.splitlines() if l.strip()][1:]
             # Collect blocks of (theatre_name, [action, ...])
             _blocks_th, _cur_nm, _cur_ac = [], None, []

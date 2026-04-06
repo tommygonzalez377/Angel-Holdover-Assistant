@@ -622,7 +622,7 @@ def _parse_one_per_line(raw: str):
         _preamble_fgt  = _fv_fgt[:_th_hdr_idx_fgt]
         _data_fgt2     = _fv_fgt[_th_hdr_idx_fgt + 1:]
         _CSTP_fgt      = _re_th.compile(r'\([^,)]+,\s*[A-Z]{2}\)\s*$')
-        _CSEX_fgt      = _re_th.compile(r'\(([^,)]+),\s*[A-Z]{2}\)\s*$')
+        _CSEX_fgt      = _re_th.compile(r'\(([^,)]+,\s*[A-Z]{2})\)\s*$')
         _blocks_fgt, _cn_fgt, _ca_fgt = [], None, []
         for _v in _data_fgt2:
             if _CSTP_fgt.search(_v):
