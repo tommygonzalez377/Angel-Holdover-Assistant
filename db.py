@@ -495,8 +495,9 @@ def _do_seed_aliases():
         ('parsons, ks',                  '',            'the parsons theatre',                   ''),
         ('norton, ks',                   '',            'norton theatre',                        ''),
         # Cinemark national shorthand
-        ('tinseltown usa',               'jacksonville', 'cinemark tinseltown jacksonville 20 + xd', 'Cinemark'),
-        ('tinseltown usa',               'fayetteville', 'cinemark tinseltown fayetteville 17 + xd', 'Cinemark'),
+        ('tinseltown usa',               'jacksonville', 'cinemark tinseltown jacksonville 20 + xd',  'Cinemark'),
+        ('tinseltown usa',               'fayetteville', 'cinemark tinseltown fayetteville 17 + xd',  'Cinemark'),
+        ('tinseltown usa',               'north aurora', 'cinemark tinseltown north aurora 17 usa',   'Cinemark'),
         ('cinemark west dundee, il',     '',             'cinemark spring hill mall 8 + xd',         'Cinemark'),
         ('cinemark west dundee',         '',             'cinemark spring hill mall 8 + xd',         'Cinemark'),
         ('movies 8 ladson oakbrook ii',  '',             'cinemark movies summerville 8',             'Cinemark'),
