@@ -1471,6 +1471,7 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     # ── Cinemark national shorthand → Mica full name ─────────────────────────
     "tinseltown usa, jacksonville":           "cinemark tinseltown jacksonville 20 + xd",
     "tinseltown usa, fayetteville":           "cinemark tinseltown fayetteville 17 + xd",
+    "tinseltown usa, north aurora":           "cinemark tinseltown north aurora 17 usa",
     "cinemark west dundee, il":               "cinemark spring hill mall 8 + xd",
     "cinemark west dundee":                   "cinemark spring hill mall 8 + xd",
     "movies 8 ladson oakbrook ii":            "cinemark movies summerville 8",
@@ -1561,7 +1562,7 @@ def _set_screening_type_per_row(page, entries: list[dict], screening_type: str, 
         name = entry["theatre"] if isinstance(entry, dict) else entry
         film = entry.get("film", "") if isinstance(entry, dict) else ""
         city = entry.get("city", "") if isinstance(entry, dict) else ""
-        key  = (name, film)
+        key  = (name, film, city)  # include city so same-name theatres in diff cities aren't deduped
         if key in seen:
             continue
         seen.add(key)
@@ -1700,7 +1701,7 @@ def _set_status_per_row(page, entries: list[dict], status: str, contact: str = "
         name = entry["theatre"] if isinstance(entry, dict) else entry
         film = entry.get("film", "") if isinstance(entry, dict) else ""
         city = entry.get("city", "") if isinstance(entry, dict) else ""
-        key  = (name, film)
+        key  = (name, film, city)  # include city so same-name theatres in diff cities aren't deduped
         if key in seen:
             continue
         seen.add(key)
