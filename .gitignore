@@ -1,0 +1,24 @@
+# Credentials — never commit
+.env
+
+# Generated output
+output/
+__pycache__/
+*.pyc
+
+# Local data files
+master_list_cache.csv
+paste.csv
+mica_booking.csv
+booking_plan_input.txt
+mass_booking_input.txt
+screenshot.png
+screenshot.csv
+*.db
+
+# AMC reports (sample data)
+AMCHoldoverReport*
+solo_mio_*.csv
+Participating*.csv
+Claude\ Master\ List.xlsx
+Practice\ pic.png

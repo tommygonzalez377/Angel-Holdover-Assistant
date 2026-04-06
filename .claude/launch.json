@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard-preview",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "7788", "--directory", "C:\\Users\\tommy.gonzalez\\Claude projects\\project1\\holdover-tracking\\output"],
+      "port": 7788
+    }
+  ]
+}

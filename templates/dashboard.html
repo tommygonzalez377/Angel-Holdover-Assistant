@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Box Office Flash – {{ week_date }}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      padding: 24px;
+    }
+
+    h2 { font-size: 1.35rem; margin-bottom: 4px; }
+
+    .subtitle {
+      color: #666;
+      font-size: 13px;
+      margin-bottom: 20px;
+    }
+
+    /* Theatre selector buttons */
+    .theatre-tabs {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+
+    .theatre-btn {
+      padding: 7px 14px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 0.15s, color 0.15s;
+      background: #e8e8e8;
+      color: #333;
+      font-weight: 400;
+      width: 100%;
+      text-align: center;
+    }
+    .theatre-btn.active {
+      background: #1a1a2e;
+      color: #fff;
+      font-weight: 700;
+    }
+    .theatre-btn.error {
+      opacity: 0.55;
+    }
+
+    /* Main table */
+    .table-wrap {
+      max-width: 720px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      background: #fff;
+    }
+
+    thead tr {
+      background: #1a1a2e;
+      color: #fff;
+    }
+
+    thead th {
+      padding: 10px 12px;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+    thead th:hover { background: #2a2a3e; }
+    thead th.center { text-align: center; }
+    thead th.right  { text-align: right; }
+
+    tbody tr { border-bottom: 1px solid #eee; }
+    tbody tr.even { background: #f9f9f9; }
+    tbody tr.odd  { background: #fff; }
+    tbody tr.angel-row { background: #fff8e1 !important; }
+
+    tbody td { padding: 8px 12px; vertical-align: middle; }
+    tbody td.center { text-align: center; }
+    tbody td.right  { text-align: right; font-family: monospace; }
+
+    .rank-cell { text-align: center; font-weight: 600; }
+
+    .dist-cell { text-align: center; }
+
+    .dist-badge {
+      background: #f59e0b;
+      color: #fff;
+      border-radius: 4px;
+      padding: 2px 7px;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .angel-title { font-weight: 700; }
+
+    .gross-cell {
+      text-align: center;
+      font-family: monospace;
+    }
+
+    tfoot tr {
+      background: #1a1a2e;
+      color: #fff;
+      font-weight: 700;
+    }
+    tfoot td { padding: 10px 12px; }
+    tfoot td.right { text-align: right; font-family: monospace; }
+
+    .sort-arrow { font-size: 10px; margin-left: 4px; }
+
+    .hint { font-size: 12px; color: #999; margin-top: 10px; }
+
+    /* Search bar */
+    .search-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 340px;
+      margin-bottom: 12px;
+      padding: 7px 12px;
+      border: 2px solid #d1d5db;
+      border-radius: 8px;
+      background: #fff;
+      transition: border-color 0.15s;
+    }
+    .search-wrap:focus-within { border-color: #1a1a2e; }
+    .search-wrap .search-icon { font-size: 14px; color: #9ca3af; flex-shrink: 0; }
+    .search-wrap input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 13px;
+      color: #333;
+      background: transparent;
+      min-width: 0;
+    }
+    .search-wrap input::placeholder { color: #aaa; }
+    .search-clear {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+      color: #9ca3af;
+      padding: 0;
+      line-height: 1;
+      display: none;
+    }
+    .search-clear.visible { display: block; }
+    .theatre-btn.hidden { display: none; }
+    .no-results { font-size: 13px; color: #888; padding: 4px 0 12px; display: none; }
+
+    .theatre-tab-wrap { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
+    .theatre-tab-wrap.hidden { display: none; }
+    .comscore-link {
+      font-size: 10px;
+      color: #6b7280;
+      text-decoration: none;
+      letter-spacing: 0.02em;
+      text-align: center;
+    }
+    .comscore-link:hover { color: #1a1a2e; text-decoration: underline; }
+
+    /* ── Two-column layout ── */
+    .main-layout {
+      display: flex;
+      align-items: flex-start;
+      gap: 28px;
+    }
+    .left-col { flex: 1 1 auto; min-width: 0; }
+    .right-col { flex: 0 0 360px; min-width: 0; }
+
+    /* ── Email template panel ── */
+    .email-panel {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 16px 18px;
+      font-size: 13px;
+    }
+    .email-panel-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #6b7280;
+      margin-bottom: 12px;
+    }
+    .email-body {
+      white-space: pre-wrap;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.65;
+      color: #222;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      min-height: 60px;
+    }
+    .copy-btn {
+      width: 100%;
+      padding: 8px;
+      background: #1a1a2e;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .copy-btn:hover { background: #2a2a3e; }
+    .copy-btn.copied { background: #16a34a; }
+    .email-panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .email-panel-header .email-panel-title { margin-bottom: 0; }
+    .customize-btn { background: none; border: none; cursor: pointer; font-size: 15px; color: #6b7280; padding: 0; line-height: 1; }
+    .customize-btn:hover { color: #1a1a2e; }
+    /* Customize modal */
+    #tpl-modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center; }
+    #tpl-modal-overlay.open { display:flex; }
+    #tpl-modal { background:#fff; border-radius:12px; padding:24px 28px; width:420px; max-width:95vw; box-shadow:0 8px 32px rgba(0,0,0,0.18); }
+    #tpl-modal h3 { margin:0 0 16px; font-size:14px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#1a1a2e; }
+    .tpl-field { margin-bottom:14px; }
+    .tpl-field label { display:block; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#6b7280; margin-bottom:4px; }
+    .tpl-field input, .tpl-field textarea { width:100%; box-sizing:border-box; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; font-family:inherit; resize:vertical; }
+    .tpl-field input:focus, .tpl-field textarea:focus { outline:none; border-color:#1a1a2e; }
+    .tpl-modal-btns { display:flex; gap:8px; margin-top:18px; }
+    .tpl-save-btn { flex:1; padding:9px; background:#1a1a2e; color:#fff; border:none; border-radius:7px; font-size:13px; font-weight:600; cursor:pointer; }
+    .tpl-save-btn:hover { background:#2a2a3e; }
+    .tpl-cancel-btn { padding:9px 16px; background:#f3f4f6; color:#374151; border:none; border-radius:7px; font-size:13px; cursor:pointer; }
+    .tpl-reset-btn { padding:9px 16px; background:#fff; color:#dc2626; border:1px solid #fca5a5; border-radius:7px; font-size:13px; cursor:pointer; }
+
+    /* Error/empty state */
+    .error-msg {
+      padding: 20px 0;
+      color: #888;
+      font-size: 13px;
+    }
+
+    /* ── New Booking Panel ──────────────────────────── */
+    #new-booking-toggle {
+      float: right;
+      margin-top: 4px;
+      padding: 6px 14px;
+      background: #1a1a2e;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    #new-booking-toggle:hover { background: #2a2a3e; }
+
+    #booking-panel {
+      display: none;
+      background: #fff;
+      border: 2px dashed #ccc;
+      border-radius: 14px;
+      padding: 20px 24px;
+      margin-bottom: 20px;
+      max-width: 680px;
+      transition: border-color 0.2s;
+    }
+    #booking-panel.drag-active { border-color: #4f8ef7; background: #eef4ff; }
+    #booking-panel.bp-running  { border-color: #f0a500; }
+    #booking-panel.bp-done     { border-color: #22c55e; }
+    #booking-panel.bp-error    { border-color: #ef4444; }
+
+    .bp-drop-hint {
+      text-align: center;
+      padding: 18px 0 8px;
+      cursor: pointer;
+    }
+    .bp-drop-hint .bp-icon  { font-size: 2rem; margin-bottom: 6px; }
+    .bp-drop-hint .bp-title { font-size: 0.95rem; font-weight: 600; color: #333; }
+    .bp-drop-hint .bp-sub   { font-size: 0.8rem; color: #999; margin-top: 3px; }
+
+    .bp-or { display: flex; align-items: center; gap: 10px; margin: 10px 0;
+              color: #ccc; font-size: 0.8rem; }
+    .bp-or::before, .bp-or::after { content: ''; flex: 1; height: 1px; background: #eee; }
+
+    #bp-paste-area {
+      width: 100%; min-height: 80px; max-height: 160px;
+      padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 8px;
+      font-family: 'Courier New', monospace; font-size: 0.78rem;
+      line-height: 1.6; resize: vertical; outline: none; box-sizing: border-box;
+    }
+    #bp-paste-area:focus { border-color: #1a1a2e; }
+    #bp-paste-area::placeholder { color: #bbb; }
+
+    #bp-run-btn {
+      margin-top: 10px; width: 100%; padding: 10px;
+      background: #4f8ef7; color: #fff; border: none;
+      border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer;
+      transition: background 0.15s;
+    }
+    #bp-run-btn:hover    { background: #2563eb; }
+    #bp-run-btn:disabled { background: #a5b4fc; cursor: default; }
+
+    #bp-progress {
+      display: none;
+      margin-top: 12px;
+      background: #1e1e1e; color: #d4d4d4;
+      border-radius: 8px; padding: 10px 14px;
+      font-family: 'Courier New', monospace; font-size: 0.75rem;
+      line-height: 1.7; max-height: 200px; overflow-y: auto;
+    }
+    #bp-progress .line-ok  { color: #4ade80; }
+    #bp-progress .line-err { color: #f87171; }
+    #bp-progress .line-wrn { color: #facc15; }
+
+    #bp-status { margin-top: 8px; font-size: 0.82rem; font-weight: 600; display: none; }
+    #bp-status.ok  { color: #16a34a; }
+    #bp-status.err { color: #dc2626; }
+
+    /* Angel/attraction summary box */
+    .angel-summary { background: #fff8e1; border: 1px solid #f59e0b; border-radius: 8px; padding: 14px 18px; margin-bottom: 24px; max-width: 520px; }
+    .angel-summary h3 { font-size: 12px; color: #92400e; margin-bottom: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+    .angel-summary table { background: transparent; font-size: 13px; }
+    .angel-summary thead tr { background: transparent; color: #92400e; }
+    .angel-summary thead th { padding: 3px 10px 6px; font-size: 11px; border-bottom: 1px solid #f59e0b; cursor: default; font-weight: 600; }
+    .angel-summary thead th.right { text-align: right; }
+    .angel-summary thead th.center { text-align: center; }
+    .angel-summary tbody tr { border-bottom: 1px solid #fde68a; background: transparent !important; }
+    .angel-summary tbody td { padding: 5px 10px; }
+    .angel-summary tfoot tr { background: transparent; color: #78350f; }
+    .angel-summary tfoot td { padding: 7px 10px; border-top: 2px solid #f59e0b; font-size: 13px; font-weight: 700; }
+    .angel-summary tfoot td.right { text-align: right; font-family: monospace; }
+  </style>
+</head>
+<body>
+
+<h2>Box Office – Week of {{ week_date }}
+  <button id="new-booking-toggle" onclick="toggleBookingPanel()">↻ New Booking</button>
+</h2>
+<p class="subtitle" id="subtitle">Generated {{ generated_at }}</p>
+
+<!-- ── Inline booking panel ─────────────────────────────── -->
+<div id="booking-panel"
+     ondragover="event.preventDefault();document.getElementById('booking-panel').classList.add('drag-active')"
+     ondragleave="document.getElementById('booking-panel').classList.remove('drag-active')"
+     ondrop="bpHandleDrop(event)">
+  <div class="bp-drop-hint" onclick="document.getElementById('bp-file-input').click()">
+    <div class="bp-icon">📄</div>
+    <div class="bp-title">Drop booking CSV or screenshot here</div>
+    <div class="bp-sub">or click to browse &nbsp;·&nbsp; .csv .png .jpg .jpeg .webp</div>
+  </div>
+  <input type="file" id="bp-file-input" accept=".csv,.png,.jpg,.jpeg,.webp" style="display:none"
+         onchange="bpHandleFile(this.files[0])">
+
+  <div class="bp-or">or paste booking text / screenshot (Ctrl+V)</div>
+  <textarea id="bp-paste-area"
+            placeholder="Ctrl+V to paste a screenshot OR copy-paste the booking table text here."
+            onpaste="bpHandlePaste(event)"></textarea>
+  <button id="bp-run-btn" onclick="bpRunText()">Run with Pasted Data</button>
+
+  <div id="bp-progress"></div>
+  <div id="bp-status"></div>
+</div>
+<!-- ──────────────────────────────────────────────────────── -->
+
+<div id="summary-box"></div>
+
+<div class="main-layout">
+  <div class="left-col">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="theatre-search" placeholder="Search theatres…" oninput="handleSearch(this.value)" autocomplete="off">
+      <button class="search-clear" id="search-clear" onclick="clearSearch()" title="Clear">✕</button>
+    </div>
+    <p class="no-results" id="no-results">No theatres match your search.</p>
+
+    <div class="theatre-tabs" id="tabs"></div>
+
+    <div class="table-wrap">
+      <div id="table-container"></div>
+      <p class="hint">Click column headers to sort.</p>
+    </div>
+  </div>
+
+  <div class="right-col">
+    <div class="email-panel" id="email-panel" style="display:none">
+      <div class="email-panel-header">
+        <div class="email-panel-title">Email Reply Template</div>
+        <button class="customize-btn" onclick="openTplModal()" title="Customize template">⚙</button>
+      </div>
+      <div class="email-body" id="email-body"></div>
+      <button class="copy-btn" id="copy-btn" onclick="copyEmail()">Copy</button>
+    </div>
+  </div>
+</div>
+
+<!-- Template customize modal -->
+<div id="tpl-modal-overlay" onclick="if(event.target===this)closeTplModal()">
+  <div id="tpl-modal">
+    <h3>Customize Email Template</h3>
+    <div class="tpl-field">
+      <label>Greeting</label>
+      <input id="tpl-greeting" placeholder="Hi {name}, I hope all is well.">
+    </div>
+    <div class="tpl-field">
+      <label>Opening line</label>
+      <input id="tpl-opener" placeholder="Thank you for these holds.">
+    </div>
+    <div class="tpl-field">
+      <label>Closing line</label>
+      <input id="tpl-closer" placeholder="Please let me know how we can help.">
+    </div>
+    <div class="tpl-field">
+      <label>Sign-off</label>
+      <input id="tpl-signoff" placeholder="Thank you,">
+    </div>
+    <div class="tpl-field">
+      <label>Your name (optional)</label>
+      <input id="tpl-name" placeholder="e.g. Tommy">
+    </div>
+    <div class="tpl-field">
+      <label>Include in theatre details</label>
+      <div style="display:flex; gap:18px; margin-top:4px;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; text-transform:none; letter-spacing:0; color:#374151; font-weight:400;">
+          <input type="checkbox" id="tpl-show-gross"> Gross
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; text-transform:none; letter-spacing:0; color:#374151; font-weight:400;">
+          <input type="checkbox" id="tpl-show-rank"> Rank
+        </label>
+      </div>
+    </div>
+    <div class="tpl-field">
+      <label>Include competing films</label>
+      <div style="display:flex; gap:18px; margin-top:4px;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; text-transform:none; letter-spacing:0; color:#374151; font-weight:400;">
+          <input type="checkbox" id="tpl-show-above"> Ranked above
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; text-transform:none; letter-spacing:0; color:#374151; font-weight:400;">
+          <input type="checkbox" id="tpl-show-below"> Ranked below
+        </label>
+      </div>
+    </div>
+    <div class="tpl-modal-btns">
+      <button class="tpl-cancel-btn" onclick="closeTplModal()">Cancel</button>
+      <button class="tpl-reset-btn" onclick="resetTplDefaults()">Reset</button>
+      <button class="tpl-save-btn" onclick="saveTplModal()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Data injected by Python ──────────────────────────────────────────────────
+const ALL_THEATRES = {{ theatre_data_json | safe }};
+
+// ── State ────────────────────────────────────────────────────────────────────
+let selectedIdx = 0;
+let sortKey     = "rank";
+let sortDir     = "asc";
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const fmt = n => n ? "$" + Number(n).toLocaleString() : "—";
+
+function sortData(films) {
+  return [...films].sort((a, b) => {
+    let v;
+    if (sortKey === "title") {
+      v = (a.title || "").localeCompare(b.title || "");
+    } else if (sortKey === "dist") {
+      v = (a.dist || "").localeCompare(b.dist || "");
+    } else {
+      v = (a[sortKey] || 0) - (b[sortKey] || 0);
+    }
+    return sortDir === "asc" ? v : -v;
+  });
+}
+
+function arrow(key) {
+  if (sortKey !== key) return "";
+  return sortDir === "asc" ? " ▲" : " ▼";
+}
+
+function toggleSort(key) {
+  if (sortKey === key) {
+    sortDir = sortDir === "asc" ? "desc" : "asc";
+  } else {
+    sortKey = key;
+    sortDir = key === "gross" ? "desc" : "asc";
+  }
+  renderTable();
+}
+
+// ── Render theatre tabs ──────────────────────────────────────────────────────
+function renderTabs() {
+  const container = document.getElementById("tabs");
+  container.innerHTML = "";
+
+  ALL_THEATRES.forEach((t, i) => {
+    const wrap = document.createElement("div");
+    wrap.className = "theatre-tab-wrap";
+
+    const btn = document.createElement("button");
+    btn.className = "theatre-btn" +
+      (i === selectedIdx ? " active" : "") +
+      (t.status !== "ok" ? " error" : "");
+
+    // Show booking sheet theatre name, fallback to master list venue
+    btn.textContent = t.theatre || t.ml_venue || `Unit ${t.unit}`;
+    btn.title = t.status !== "ok" ? (t.error || t.status) : t.ml_venue;
+
+    btn.addEventListener("click", () => {
+      selectedIdx = i;
+      sortKey = "rank";
+      sortDir = "asc";
+      renderTabs();
+      renderTable();
+    });
+    wrap.appendChild(btn);
+
+    if (t.url) {
+      const link = document.createElement("a");
+      link.className = "comscore-link";
+      link.href = t.url;
+      link.target = "_blank";
+      link.textContent = "Comscore ↗";
+      wrap.appendChild(link);
+    }
+
+    container.appendChild(wrap);
+  });
+}
+
+// ── Render table ─────────────────────────────────────────────────────────────
+function renderTable() {
+  const t         = ALL_THEATRES[selectedIdx];
+  const container = document.getElementById("table-container");
+  const subtitle  = document.getElementById("subtitle");
+
+  // Update subtitle with valid-as-of timestamp
+  subtitle.textContent = t.valid_as_of
+    ? `Data as of: ${t.valid_as_of}`
+    : "Generated {{ generated_at }}";
+
+  if (!t.films || t.films.length === 0) {
+    const isNotYet = t.error && t.error.includes("typically posts Saturday");
+    container.innerHTML = `<p class="error-msg">
+      ${isNotYet
+        ? "⏳ Flash data not yet available for this week.<br>Comscore typically posts Saturday or Sunday."
+        : (t.error || "No data available for this theatre.")}
+      ${t.url ? `<br><br><a href="${t.url}" target="_blank" style="color:#1a1a2e">Open in Comscore ↗</a>` : ""}
+    </p>`;
+    return;
+  }
+
+  const sorted = sortData(t.films);
+  const total  = t.films.reduce((s, r) => s + (r.gross || 0), 0);
+
+  const cols = [
+    { key: "rank",  label: "Rank",       cls: "center" },
+    { key: "title", label: "Title",       cls: "" },
+    { key: "dist",  label: "Dist",        cls: "center" },
+    { key: "gross", label: "Week Gross",  cls: "right" },
+  ];
+
+  const thead = `
+    <thead>
+      <tr>
+        ${cols.map(c => `
+          <th class="${c.cls}" onclick="toggleSort('${c.key}')">
+            ${c.label}<span class="sort-arrow">${arrow(c.key)}</span>
+          </th>
+        `).join("")}
+      </tr>
+    </thead>`;
+
+  const rows = sorted.map((r, i) => {
+    const angel = r.is_angel;
+    const trCls = angel ? "angel-row" : (i % 2 === 0 ? "even" : "odd");
+    const distCell = angel
+      ? `<span class="dist-badge">${r.dist}</span>`
+      : r.dist;
+    return `
+      <tr class="${trCls}">
+        <td class="rank-cell">${r.rank}</td>
+        <td class="${angel ? "angel-title" : ""}">${r.title}</td>
+        <td class="dist-cell">${distCell}</td>
+        <td class="gross-cell">${fmt(r.gross)}</td>
+      </tr>`;
+  }).join("");
+
+  const tfoot = `
+    <tfoot>
+      <tr>
+        <td colspan="3">Grand Total</td>
+        <td class="right">${fmt(total)}</td>
+      </tr>
+    </tfoot>`;
+
+  container.innerHTML = `<table>${thead}<tbody>${rows}</tbody>${tfoot}</table>`;
+  renderEmailTemplate();
+}
+
+// ── Render summary box ───────────────────────────────────────────────────────
+function renderSummary() {
+  const box = document.getElementById("summary-box");
+
+  // Find attraction name from the first angel-flagged film
+  let attraction = "";
+  for (const t of ALL_THEATRES) {
+    const af = (t.films || []).find(f => f.is_angel);
+    if (af) { attraction = af.title; break; }
+  }
+  if (!attraction) { box.innerHTML = ""; return; }
+
+  const rows = ALL_THEATRES
+    .filter(t => t.status === "ok")
+    .map(t => {
+      const af = (t.films || []).find(f => f.is_angel);
+      if (!af) return null;
+      return { theatre: t.theatre || t.ml_venue, rank: af.rank, titles: t.films.length, gross: af.gross };
+    })
+    .filter(Boolean);
+
+  if (!rows.length) { box.innerHTML = ""; return; }
+
+  const totalGross = rows.reduce((s, r) => s + r.gross, 0);
+  const nLoc = rows.length;
+
+  const tbody = rows.map(r => `
+    <tr>
+      <td>${r.theatre}</td>
+      <td style="text-align:center">${r.rank}</td>
+      <td style="text-align:center">${r.titles}</td>
+      <td style="text-align:right;font-family:monospace">${fmt(r.gross)}</td>
+    </tr>`).join("");
+
+  box.innerHTML = `
+    <div class="angel-summary">
+      <h3>${attraction} — Flash Gross Summary</h3>
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:left">Theatre</th>
+            <th class="center">Rank</th>
+            <th class="center">Titles</th>
+            <th class="right">Week Gross</th>
+          </tr>
+        </thead>
+        <tbody>${tbody}</tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3">Grand Total &nbsp;(${nLoc} location${nLoc !== 1 ? "s" : ""})</td>
+            <td class="right">${fmt(totalGross)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>`;
+}
+
+// ── Email template preferences (localStorage) ────────────────────────────────
+const TPL_KEY = 'angelEmailTplPrefs';
+const TPL_DEFAULTS = {
+  greeting:  'Hi {name}, I hope all is well.',
+  opener:    'Thank you for these holds.',
+  closer:    'Please let me know how we can help.',
+  signoff:   'Thank you,',
+  name:      '',
+  showGross: true,
+  showRank:  true,
+  showAbove: true,
+  showBelow: true,
+};
+function getTplPrefs() {
+  try { return Object.assign({}, TPL_DEFAULTS, JSON.parse(localStorage.getItem(TPL_KEY) || '{}')); }
+  catch { return Object.assign({}, TPL_DEFAULTS); }
+}
+function openTplModal() {
+  const p = getTplPrefs();
+  document.getElementById('tpl-greeting').value       = p.greeting;
+  document.getElementById('tpl-opener').value         = p.opener;
+  document.getElementById('tpl-closer').value         = p.closer;
+  document.getElementById('tpl-signoff').value        = p.signoff;
+  document.getElementById('tpl-name').value           = p.name;
+  document.getElementById('tpl-show-gross').checked   = p.showGross;
+  document.getElementById('tpl-show-rank').checked    = p.showRank;
+  document.getElementById('tpl-show-above').checked   = p.showAbove;
+  document.getElementById('tpl-show-below').checked   = p.showBelow;
+  document.getElementById('tpl-modal-overlay').classList.add('open');
+}
+function closeTplModal() {
+  document.getElementById('tpl-modal-overlay').classList.remove('open');
+}
+function saveTplModal() {
+  const prefs = {
+    greeting:  document.getElementById('tpl-greeting').value.trim()  || TPL_DEFAULTS.greeting,
+    opener:    document.getElementById('tpl-opener').value.trim()    || TPL_DEFAULTS.opener,
+    closer:    document.getElementById('tpl-closer').value.trim()    || TPL_DEFAULTS.closer,
+    signoff:   document.getElementById('tpl-signoff').value.trim()   || TPL_DEFAULTS.signoff,
+    name:      document.getElementById('tpl-name').value.trim(),
+    showGross: document.getElementById('tpl-show-gross').checked,
+    showRank:  document.getElementById('tpl-show-rank').checked,
+    showAbove: document.getElementById('tpl-show-above').checked,
+    showBelow: document.getElementById('tpl-show-below').checked,
+  };
+  localStorage.setItem(TPL_KEY, JSON.stringify(prefs));
+  closeTplModal();
+  renderEmailTemplate();
+}
+function resetTplDefaults() {
+  localStorage.removeItem(TPL_KEY);
+  closeTplModal();
+  renderEmailTemplate();
+}
+
+// ── Email reply template ─────────────────────────────────────────────────────
+function renderEmailTemplate() {
+  const panel   = document.getElementById("email-panel");
+  const bodyEl  = document.getElementById("email-body");
+  const prefs   = getTplPrefs();
+
+  // Collect all Final theatres that have an Angel film with data
+  const finals = ALL_THEATRES.filter(t => {
+    if (!t.films || t.films.length === 0) return false;
+    if (!(t.booking_action || "").toLowerCase().includes("final")) return false;
+    return t.films.some(f => f.is_angel);
+  });
+
+  if (finals.length === 0) { panel.style.display = "none"; return; }
+
+  const locationLines = finals.map((t, i) => {
+    const theatre     = t.theatre || t.ml_venue || "";
+    const angel       = t.films.find(f => f.is_angel);
+    const gross       = angel.gross ? "$" + Number(angel.gross).toLocaleString() : "";
+    const angelRank = angel.rank || 0;
+    const competitors = [...t.films]
+      .filter(f => !f.is_angel)
+      .filter(f => {
+        if (prefs.showAbove && f.rank < angelRank) return true;
+        if (prefs.showBelow && f.rank > angelRank) return true;
+        if (!prefs.showAbove && !prefs.showBelow) return false;
+        return false;
+      })
+      .sort((a, b) => a.rank - b.rank)
+      .map(f => f.title);
+    const filmList = competitors.join(", ");
+
+    const details = [
+      prefs.showGross && gross        ? `${gross} gross`       : null,
+      prefs.showRank  && angel.rank   ? `ranked #${angel.rank}` : null,
+    ].filter(Boolean).join(", ");
+    const detailsPart = details ? `, ${details}` : "";
+
+    if (i === 0) {
+      return filmList
+        ? `At ${theatre}${detailsPart}, can we hold with the following: ${filmList}?`
+        : `At ${theatre}${detailsPart}, can we hold?`;
+    } else {
+      return filmList
+        ? `${theatre}${detailsPart}: ${filmList}?`
+        : `${theatre}${detailsPart}?`;
+    }
+  });
+
+  const buyerFull = (ALL_THEATRES.find(t => t.buyer) || {}).buyer || "";
+  const buyerName = buyerFull ? buyerFull.trim().split(/\s+/)[0] : "Contact";
+  const greeting  = prefs.greeting.replace('{name}', buyerName);
+  const signature = prefs.name ? `${prefs.signoff}\n${prefs.name}` : prefs.signoff;
+
+  const plain =
+    `${greeting}\n\n` +
+    `${prefs.opener}\n\n` +
+    locationLines.join("\n\n") +
+    `\n\n${prefs.closer}\n\n${signature}`;
+
+  bodyEl.dataset.plain = plain;
+  bodyEl.innerHTML = plain.replace(/\n/g, "<br>");
+  panel.style.display = "block";
+}
+
+function copyEmail() {
+  const text = document.getElementById("email-body").dataset.plain || "";
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById("copy-btn");
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 1800);
+  });
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+function handleSearch(query) {
+  const q = query.trim().toLowerCase();
+  const btns = document.querySelectorAll(".theatre-btn");
+  const clearBtn = document.getElementById("search-clear");
+  const noResults = document.getElementById("no-results");
+
+  clearBtn.classList.toggle("visible", q.length > 0);
+
+  let visible = 0;
+  btns.forEach((btn, i) => {
+    const name = (ALL_THEATRES[i].theatre || ALL_THEATRES[i].ml_venue || "").toLowerCase();
+    const match = !q || name.includes(q);
+    // Toggle hidden on the wrapper (parent) so the Comscore link hides too
+    const wrap = btn.closest(".theatre-tab-wrap") || btn;
+    wrap.classList.toggle("hidden", !match);
+    if (match) visible++;
+  });
+
+  noResults.style.display = visible === 0 && q ? "block" : "none";
+}
+
+function clearSearch() {
+  const input = document.getElementById("theatre-search");
+  input.value = "";
+  handleSearch("");
+  input.focus();
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+renderSummary();
+renderTabs();
+renderTable();
+
+// ── New Booking Panel ────────────────────────────────────────────────────────
+// Works when served via the launcher at localhost:8766.
+// Falls back to that origin if opened as a file:// URL.
+const BP_ORIGIN = (location.protocol === 'file:' || location.origin === 'null')
+  ? 'http://localhost:8766'
+  : location.origin;
+
+function toggleBookingPanel() {
+  const panel = document.getElementById('booking-panel');
+  const open  = panel.style.display !== 'none';
+  panel.style.display = open ? 'none' : 'block';
+  document.getElementById('new-booking-toggle').textContent = open ? '↻ New Booking' : '✕ Close';
+}
+
+// Drag & drop onto the panel
+function bpHandleDrop(e) {
+  e.preventDefault();
+  document.getElementById('booking-panel').classList.remove('drag-active');
+  const file = e.dataTransfer.files[0];
+  if (file) bpHandleFile(file);
+}
+
+// Paste handler on the textarea (catches screenshot images too)
+function bpHandlePaste(e) {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      bpHandleFile(new File([item.getAsFile()], 'screenshot.png', { type: 'image/png' }));
+      return;
+    }
+  }
+  // Text paste — fall through to textarea, user clicks Run
+}
+
+// Global Ctrl+V anywhere on the page
+document.addEventListener('paste', e => {
+  if (document.activeElement === document.getElementById('bp-paste-area')) return;
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      // Auto-open panel if closed
+      if (document.getElementById('booking-panel').style.display === 'none') toggleBookingPanel();
+      bpHandleFile(new File([item.getAsFile()], 'screenshot.png', { type: 'image/png' }));
+      return;
+    }
+  }
+});
+
+async function bpHandleFile(file) {
+  const allowed = ['.csv', '.png', '.jpg', '.jpeg', '.webp'];
+  if (!allowed.some(ext => file.name.toLowerCase().endsWith(ext))) {
+    alert('Please use a .csv or image file (.png, .jpg, .jpeg, .webp).');
+    return;
+  }
+  const isImage = /\.(png|jpe?g|webp)$/i.test(file.name);
+  const body    = isImage ? await file.arrayBuffer() : await file.text();
+  bpRun(body, isImage ? 'application/octet-stream' : 'text/plain', file.name);
+}
+
+function bpRunText() {
+  const text = document.getElementById('bp-paste-area').value.trim();
+  if (!text) { alert('Paste some booking data first.'); return; }
+  bpRun(text, 'text/plain', 'paste.csv');
+}
+
+async function bpRun(body, contentType, filename) {
+  const panel   = document.getElementById('booking-panel');
+  const progress = document.getElementById('bp-progress');
+  const status  = document.getElementById('bp-status');
+  const runBtn  = document.getElementById('bp-run-btn');
+
+  panel.className    = 'bp-running';
+  progress.style.display = 'block';
+  progress.innerHTML = '';
+  status.style.display = 'none';
+  runBtn.disabled    = true;
+  runBtn.textContent = 'Running…';
+
+  let job_id;
+  try {
+    const res = await fetch(BP_ORIGIN + '/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': contentType, 'X-Filename': filename },
+      body,
+    });
+    ({ job_id } = await res.json());
+  } catch (err) {
+    bpSetError('Upload failed: ' + err.message);
+    return;
+  }
+
+  const src = new EventSource(BP_ORIGIN + '/stream/' + job_id);
+  src.onmessage = e => {
+    const line = e.data;
+    if (line === '__DONE__')           { src.close(); return; }
+    if (line === '__SUCCESS__')        { src.close(); bpSetDone(); return; }
+    if (line.startsWith('__ERROR__')) { src.close(); bpSetError(line.replace('__ERROR__', '').trim()); return; }
+    bpAppend(line);
+  };
+  src.onerror = () => { src.close(); bpSetError('Lost connection to launcher.'); };
+}
+
+function bpAppend(text) {
+  const d = document.createElement('div');
+  if      (/error|failed|not found/i.test(text)) d.className = 'line-err';
+  else if (/login successful|dashboard saved|scraping/i.test(text)) d.className = 'line-ok';
+  else if (/not in master list/i.test(text)) d.className = 'line-wrn';
+  d.textContent = text;
+  const box = document.getElementById('bp-progress');
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
+}
+
+function bpSetDone() {
+  document.getElementById('booking-panel').className = 'bp-done';
+  const s = document.getElementById('bp-status');
+  s.style.display = 'block';
+  s.className = 'ok';
+  s.textContent = '✅ Done — reloading dashboard…';
+  setTimeout(() => location.reload(), 1200);
+}
+
+function bpSetError(msg) {
+  document.getElementById('booking-panel').className = 'bp-error';
+  const s = document.getElementById('bp-status');
+  s.style.display = 'block';
+  s.className = 'err';
+  s.textContent = '❌ ' + msg;
+  const btn = document.getElementById('bp-run-btn');
+  btn.disabled = false;
+  btn.textContent = 'Run with Pasted Data';
+}
+</script>
+
+</body>
+</html>
