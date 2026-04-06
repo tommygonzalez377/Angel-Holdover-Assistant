@@ -413,14 +413,27 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
     remainder = values[action_idx + 1:]
     if not remainder:
         return []
-    # ID-based detection: if first col is Unit (3+ digit numbers start each row)
-    if any(p in headers[0].lower() for p in ("unit", "comscore", "#")):
+    # ID-based detection: if any of the first 5 cols is Unit/# (3+ digit numbers anchor rows)
+    # This handles cell-wrapping pastes where theatre names split across lines, throwing off
+    # fixed-size chunking.  Unit IDs are always 3-4 digit numbers; screen counts are ≤2 digits.
+    _unit_col_idx = next(
+        (i for i, h in enumerate(headers[:5])
+         if any(p in h.lower() for p in ("unit", "comscore", "#"))),
+        None
+    )
+    if _unit_col_idx is None and any(p in headers[0].lower() for p in ("unit", "comscore", "#")):
+        _unit_col_idx = 0
+    if _unit_col_idx is not None:
         id_pos = [i for i, v in enumerate(remainder) if _re.fullmatch(r'\d{3,}', v)]
         if id_pos:
             rows = []
             for idx, pos in enumerate(id_pos):
-                end = id_pos[idx + 1] if idx + 1 < len(id_pos) else len(remainder)
-                row = list(remainder[pos:end])
+                row_start = pos - _unit_col_idx
+                if row_start < 0:
+                    continue
+                next_id = id_pos[idx + 1] if idx + 1 < len(id_pos) else len(remainder)
+                row_end = next_id - _unit_col_idx
+                row = list(remainder[row_start:row_end])
                 if len(row) < n_cols:
                     row += [""] * (n_cols - len(row))
                 rows.append(dict(zip(headers, row[:n_cols])))
