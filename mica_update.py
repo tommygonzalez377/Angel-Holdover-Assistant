@@ -556,6 +556,70 @@ def parse_booking_csv(path: Path) -> list[dict]:
             return results
         # ── End Cinemark Theater # TSV ────────────────────────────────────────
 
+        # ── Cinemark "Theater #" one-per-line variant ─────────────────────────
+        # Same format as TSV above but each cell is on its own line (no tabs).
+        # Detected when the first non-empty content line is exactly "Theater #".
+        _is_theater_hash_opl = (
+            _first_content_line.strip().lower() in ('theater #', 'theatre #')
+            and '\t' not in _first_content_line
+        )
+        if _is_theater_hash_opl:
+            _preamble_films_opl = [l.strip() for l in lines[:header_idx] if l.strip()]
+            _all_vals_opl = [l.strip() for l in content.splitlines() if l.strip()]
+            # Collect headers: consecutive non-numeric non-empty values at start
+            _opl_hdrs = []
+            _opl_ds = 0
+            for _oi, _ov in enumerate(_all_vals_opl):
+                if _re_pbc.fullmatch(r'\d{3,}', _ov):
+                    _opl_ds = _oi
+                    break
+                _opl_hdrs.append(_ov)
+            # Deduplicate column names
+            _seen_opl = {}
+            _deduped_opl = []
+            for _h in _opl_hdrs:
+                _hl = _h.lower()
+                if _hl in _seen_opl:
+                    _seen_opl[_hl] += 1
+                    _deduped_opl.append(f"{_h}.{_seen_opl[_hl]}")
+                else:
+                    _seen_opl[_hl] = 0
+                    _deduped_opl.append(_h)
+            _INFO_COLS_OPL = {'theater #', 'theatre #', 'name (city, state)', 'dma',
+                               'screens', 'contact', 'chain', 'circuit', 'branch'}
+            _film_idxs_opl = [i for i, h in enumerate(_deduped_opl)
+                               if h.split('.')[0].strip().lower() not in _INFO_COLS_OPL]
+            log(f"  [1b-opl-mica] preamble={_preamble_films_opl} film_idxs={_film_idxs_opl} headers={_deduped_opl}")
+            _opl_data_vals = _all_vals_opl[_opl_ds:]
+            _id_pos_opl = [i for i, v in enumerate(_opl_data_vals) if _re_pbc.fullmatch(r'\d{3,}', v)]
+            _cpat_opl = _re_pbc.compile(r'\(([^,)]+),\s*[A-Z]{2}\)\s*$')
+            for _ri, _rpos in enumerate(_id_pos_opl):
+                _rnxt = _id_pos_opl[_ri + 1] if _ri + 1 < len(_id_pos_opl) else len(_opl_data_vals)
+                _row_opl = _opl_data_vals[_rpos:_rnxt]
+                _raw_nm_opl = _row_opl[1] if len(_row_opl) > 1 else ""
+                _cm_opl = _cpat_opl.search(_raw_nm_opl)
+                _city_opl = _cm_opl.group(1).strip() if _cm_opl else ""
+                _theatre_opl = _cpat_opl.sub("", _raw_nm_opl).strip()
+                if not _theatre_opl:
+                    continue
+                for _fi, _ci in enumerate(_film_idxs_opl):
+                    _val_opl = _row_opl[_ci].strip().lower() if _ci < len(_row_opl) else ""
+                    _film_opl = _preamble_films_opl[_fi] if _fi < len(_preamble_films_opl) else ""
+                    if _val_opl == 'final':
+                        _a_opl = 'Final'
+                    elif _val_opl and _val_opl not in ('-',):
+                        _a_opl = 'Hold'   # "clean" = clean hold
+                    else:
+                        continue
+                    _phrase_opl = "" if _val_opl in ('final', 'clean') else _val_opl
+                    _st_opl = get_screening_type(_phrase_opl) if _a_opl == 'Hold' else None
+                    results.append({"theatre": _theatre_opl, "city": _city_opl,
+                                    "action": _a_opl, "film": _film_opl,
+                                    "phrase": _phrase_opl, "screening_type": _st_opl})
+            log(f"  [1b-opl-mica] parsed {len(results)} results")
+            return results
+        # ── End Cinemark Theater # one-per-line ───────────────────────────────
+
         _opl_rows = _parse_one_per_line_to_dicts(content)
         log(f"  [debug] one-per-line returned {len(_opl_rows)} rows; first values: {[l.strip() for l in content.splitlines() if l.strip()][:5]}")
         if (_max_tabs < 2 and _max_commas < 2) or _is_comscore_hdr:
