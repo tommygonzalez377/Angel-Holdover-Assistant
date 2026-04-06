@@ -1472,6 +1472,8 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "tinseltown usa, jacksonville":           "cinemark tinseltown jacksonville 20 + xd",
     "tinseltown usa, fayetteville":           "cinemark tinseltown fayetteville 17 + xd",
     "tinseltown usa, north aurora":           "cinemark tinseltown north aurora 17 usa",
+    "cinemark orlando and xd":               "cinemark festival bay orlando 20 + xd",
+    "cinemark orlando and xd, orlando":      "cinemark festival bay orlando 20 + xd",
     "cinemark west dundee, il":               "cinemark spring hill mall 8 + xd",
     "cinemark west dundee":                   "cinemark spring hill mall 8 + xd",
     "movies 8 ladson oakbrook ii":            "cinemark movies summerville 8",
