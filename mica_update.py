@@ -620,6 +620,61 @@ def parse_booking_csv(path: Path) -> list[dict]:
             return results
         # ── End Cinemark Theater # one-per-line ───────────────────────────────
 
+        # ── "THEATRE" single-header + alternating name/action format ──────────
+        # Preamble lines (e.g. "David", "Solo Mio") are film names.
+        # Data follows as: TheatreName(City,ST) / Action [/ Action2 for film2] ...
+        # Theatre name lines are identified by "(City, ST)" at the end.
+        # If a theatre has 2 action lines and 2 preamble films, first action = film 1.
+        # If only 1 action line, apply to all films.
+        _is_theatre_hdr = (
+            _first_content_line.strip().lower() in ('theatre', 'theater')
+            and '\t' not in _first_content_line
+        )
+        if _is_theatre_hdr:
+            _preamble_films_th = [l.strip() for l in lines[:header_idx] if l.strip()]
+            _CITY_ST_th = _re_pbc.compile(r'\([^,)]+,\s*[A-Z]{2}\)\s*$')
+            _CITY_EX_th = _re_pbc.compile(r'\(([^,)]+),\s*[A-Z]{2}\)\s*$')
+            _all_th = [l.strip() for l in content.splitlines() if l.strip()][1:]
+            # Collect blocks of (theatre_name, [action, ...])
+            _blocks_th, _cur_nm, _cur_ac = [], None, []
+            for _v in _all_th:
+                if _CITY_ST_th.search(_v):
+                    if _cur_nm is not None:
+                        _blocks_th.append((_cur_nm, _cur_ac))
+                    _cur_nm, _cur_ac = _v, []
+                elif _cur_nm is not None:
+                    _cur_ac.append(_v)
+            if _cur_nm is not None:
+                _blocks_th.append((_cur_nm, _cur_ac))
+            log(f"  [theatre-hdr] preamble={_preamble_films_th} blocks={len(_blocks_th)}")
+            for _nm, _acts in _blocks_th:
+                if not _acts:
+                    continue
+                _cme = _CITY_EX_th.search(_nm)
+                _city_th2 = _cme.group(1).strip() if _cme else ""
+                _clean_th = _CITY_EX_th.sub("", _nm).strip()
+                # Pair actions with films
+                if len(_preamble_films_th) >= 2 and len(_acts) >= 2:
+                    _film_act_pairs = list(zip(_preamble_films_th, _acts))
+                else:
+                    _film_act_pairs = [(_f, _acts[0]) for _f in (_preamble_films_th or [""])]
+                for _film_th2, _act_th in _film_act_pairs:
+                    _al_th = _act_th.lower()
+                    if 'final' in _al_th:
+                        _a_th2 = 'Final'
+                    elif 'hold' in _al_th:
+                        _a_th2 = 'Hold'
+                    else:
+                        continue
+                    _phrase_th2 = _act_th if _a_th2 == 'Hold' else ""
+                    _st_th2 = get_screening_type(_phrase_th2) if _a_th2 == 'Hold' else None
+                    results.append({"theatre": _clean_th, "city": _city_th2,
+                                    "action": _a_th2, "film": _film_th2,
+                                    "phrase": _phrase_th2, "screening_type": _st_th2})
+            log(f"  [theatre-hdr] parsed {len(results)} results")
+            return results
+        # ── End THEATRE header alternating format ─────────────────────────────
+
         _opl_rows = _parse_one_per_line_to_dicts(content)
         log(f"  [debug] one-per-line returned {len(_opl_rows)} rows; first values: {[l.strip() for l in content.splitlines() if l.strip()][:5]}")
         if (_max_tabs < 2 and _max_commas < 2) or _is_comscore_hdr:

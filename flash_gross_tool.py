@@ -605,6 +605,60 @@ def _parse_one_per_line(raw: str):
                                     columns=['Theatre', 'Action'],
                                     dtype=str)
 
+    # ── "THEATRE" single-header + alternating name/action format ──────────────
+    # e.g. preamble lines "David", "Solo Mio" then "THEATRE" header, then
+    # alternating: TheatreName(City,ST) / Action [/ Action2 for film2] ...
+    # Theatre lines identified by "(City, ST)" suffix; everything else = action.
+    import re as _re_th
+    _th_hdr_idx_fgt = None
+    _fv_fgt = [l.strip() for l in raw.splitlines() if l.strip()]
+    for _thi_fgt, _thv_fgt in enumerate(_fv_fgt[:8]):
+        if _thv_fgt.lower() in ('theatre', 'theater'):
+            _nxt = _fv_fgt[_thi_fgt + 1:_thi_fgt + 3]
+            if any(_re_th.search(r'\([^,)]+,\s*[A-Z]{2}\)', _v) for _v in _nxt):
+                _th_hdr_idx_fgt = _thi_fgt
+                break
+    if _th_hdr_idx_fgt is not None:
+        _preamble_fgt  = _fv_fgt[:_th_hdr_idx_fgt]
+        _data_fgt2     = _fv_fgt[_th_hdr_idx_fgt + 1:]
+        _CSTP_fgt      = _re_th.compile(r'\([^,)]+,\s*[A-Z]{2}\)\s*$')
+        _CSEX_fgt      = _re_th.compile(r'\(([^,)]+),\s*[A-Z]{2}\)\s*$')
+        _blocks_fgt, _cn_fgt, _ca_fgt = [], None, []
+        for _v in _data_fgt2:
+            if _CSTP_fgt.search(_v):
+                if _cn_fgt is not None:
+                    _blocks_fgt.append((_cn_fgt, _ca_fgt))
+                _cn_fgt, _ca_fgt = _v, []
+            elif _cn_fgt is not None:
+                _ca_fgt.append(_v)
+        if _cn_fgt is not None:
+            _blocks_fgt.append((_cn_fgt, _ca_fgt))
+        _rows_fgt2 = []
+        for _nm_f, _acts_f in _blocks_fgt:
+            if not _acts_f:
+                continue
+            _cme_f = _CSEX_fgt.search(_nm_f)
+            _city_f = _cme_f.group(1).strip() if _cme_f else ""
+            _clean_f = _CSEX_fgt.sub("", _nm_f).strip()
+            if len(_preamble_fgt) >= 2 and len(_acts_f) >= 2:
+                _pairs_f = list(zip(_preamble_fgt, _acts_f))
+            else:
+                _pairs_f = [(_preamble_fgt[0] if _preamble_fgt else "", _acts_f[0])]
+            for _film_f, _act_f in _pairs_f:
+                _al_f = _act_f.lower()
+                if 'final' in _al_f:
+                    _action_f = 'Final'
+                elif 'hold' in _al_f:
+                    _action_f = 'Hold'
+                else:
+                    continue
+                _rows_fgt2.append([_clean_f, _city_f, _film_f, _action_f, _act_f])
+        if _rows_fgt2:
+            print(f"  [theatre-hdr] parsed {len(_rows_fgt2)} rows", flush=True)
+            return pd.DataFrame(_rows_fgt2,
+                                columns=['Theatre', 'City', 'Film', 'Action', 'Terms'],
+                                dtype=str)
+
     # ── standard formats below ─────────────────────────────────────────────
     values = [l.strip() for l in raw.splitlines() if l.strip()]
     if not values:
