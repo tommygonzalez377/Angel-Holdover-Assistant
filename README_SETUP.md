@@ -19,19 +19,11 @@ A tool for the theatrical booking team. Once set up, you launch it by double-cli
 
 1. **Get the `holdover-tracking` folder** from Tommy or clone the GitHub repo. Save it somewhere convenient (Desktop or Documents).
 
-2. **Open Terminal** — press `⌘ Space`, type `Terminal`, press Enter
-
-3. **Run this once** to allow the setup scripts to execute (paste into Terminal and press Enter):
-   ```
-   chmod +x ~/Desktop/holdover-tracking/setup.command ~/Desktop/holdover-tracking/start.command
-   ```
-   *(Adjust the path if you saved it somewhere other than Desktop)*
-
-4. **Double-click `setup.command`** — a Terminal window opens and installs everything:
+2. **Double-click `setup.command`** — a Terminal window opens and installs everything:
    - Python packages
    - Playwright Chromium browser (~120 MB, one-time download)
 
-5. Setup complete! Close the Terminal window when it says "Setup complete!"
+3. Setup complete! Close the Terminal window when it says "Setup complete!"
 
 > **Gatekeeper prompt?** If macOS says "setup.command cannot be opened because it is from an unidentified developer", right-click the file and choose **Open**, then click **Open** in the dialog.
 
