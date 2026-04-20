@@ -183,6 +183,14 @@ def decrypt(ciphertext: str) -> str:
 
 # ── Users ─────────────────────────────────────────────────────────────────────
 
+def get_or_create_local_user() -> dict:
+    """
+    Return (or create) the single local user used in local/desktop mode.
+    This ensures save_credentials / get_credentials have a real row to work with.
+    """
+    return upsert_user(email='local', name='Local User')
+
+
 def upsert_user(email: str, name: str = '', google_id: str = '') -> dict:
     """Create or update a user on Google login. Returns the user row."""
     p = _placeholder()
@@ -564,6 +572,38 @@ def _do_seed_aliases():
         ('cinemark waco and xd',              'waco',          'cinemark cottonwood creek market waco 14',         'Cinemark'),
         ('cinemark waco and xd',              '',              'cinemark cottonwood creek market waco 14',         'Cinemark'),
         ('cinemark 14',                       'wichita falls', 'cinemark wichita falls 14',                        'Cinemark'),
+        # ── Cinemark Pacific Northwest (THEATRE-header booking) ──────────────────
+        ('lincoln square cinema with imax',   'bellevue',      'cinemark lincoln square cinemas imax 16',          'Cinemark'),
+        ('lincoln square cinema with imax',   '',              'cinemark lincoln square cinemas imax 16',          'Cinemark'),
+        ('lincoln square cinema bistro 6',    'bellevue',      'cinemark reserve lincoln square dine-in 6',        'Cinemark'),
+        ('lincoln square cinema bistro 6',    '',              'cinemark reserve lincoln square dine-in 6',        'Cinemark'),
+        ('cinemark totem lake + xd',          'kirkland',      'cinemark village at totem lake 8',                 'Cinemark'),
+        ('cinemark totem lake + xd',          '',              'cinemark village at totem lake 8',                 'Cinemark'),
+        ('century walla walla grand cinema 12','walla walla',  'cinemark walla walla grand cinema12',              'Cinemark'),
+        ('century walla walla grand cinema 12','',             'cinemark walla walla grand cinema12',              'Cinemark'),
+        # ── Cinemark Taylor Reynolds circuit (grayed-out venues) ─────────────────
+        ('las vegas samstown 18',              'las vegas',     "cinemark century 18 sam's town (las vegas)",        'Cinemark'),
+        ('las vegas samstown 18',              '',              "cinemark century 18 sam's town (las vegas)",        'Cinemark'),
+        ('las vegas santa fe station 16 + xd', 'las vegas',    'cinemark century las vegas santa fe station 16 + xd', 'Cinemark'),
+        ('las vegas santa fe station 16 + xd', '',             'cinemark century las vegas santa fe station 16 + xd', 'Cinemark'),
+        ('sugarhouse movies 10',               'salt lake city','cinemark sugarhouse salt lake city 10',             'Cinemark'),
+        ('sugarhouse movies 10',               '',              'cinemark sugarhouse salt lake city 10',             'Cinemark'),
+        ('cinemark layton and xd',             'layton',        'cinemark layton 7 + xd',                           'Cinemark'),
+        ('cinemark layton and xd',             '',              'cinemark layton 7 + xd',                           'Cinemark'),
+        ('cinemark west valley + xd',          'west valley city', 'cinemark west valley 10 + xd',                  'Cinemark'),
+        ('cinemark west valley + xd',          '',              'cinemark west valley 10 + xd',                     'Cinemark'),
+        ('tucson park place 20 + xd',          'tucson',        'cinemark century park place 20 + xd',              'Cinemark'),
+        ('tucson park place 20 + xd',          '',              'cinemark century park place 20 + xd',              'Cinemark'),
+        ('century tucson marketplace and xd',  'tucson',        'cinemark century tucson marketplace  14+ xd',      'Cinemark'),
+        ('century tucson marketplace and xd',  '',              'cinemark century tucson marketplace  14+ xd',      'Cinemark'),
+        ('imperial valley 14',                 'el centro',     'cinemark century imperial valley mall 14 (elcentro)', 'Cinemark'),
+        ('imperial valley 14',                 '',              'cinemark century imperial valley mall 14 (elcentro)', 'Cinemark'),
+        # City-qualified "Cinemark 16" (ambiguous without city)
+        ('cinemark 16',                        'mesa',          'cinemark mesa 16',                                 'Cinemark'),
+        ('cinemark 16',                        'provo',         'cinemark provo 16',                                'Cinemark'),
+        # Reno Parklane
+        ('reno parklane 16',                   'reno',          'cinemark century park lane 16 (reno)',             'Cinemark'),
+        ('reno parklane 16',                   '',              'cinemark century park lane 16 (reno)',             'Cinemark'),
     ]
 
     for booking_name, city, master_name, chain in SEED_ALIASES:

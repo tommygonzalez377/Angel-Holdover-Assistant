@@ -1,0 +1,41 @@
+#!/bin/bash
+# Angel Holdover Assistant.app launcher
+# This script is executed when you double-click the app icon.
+
+# Find the project directory: .app is inside holdover-tracking/
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Contents/MacOS/ → Contents/ → .app/ → holdover-tracking/
+PROJ_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+# ── Check setup ───────────────────────────────────────────────────────────────
+if [ ! -f "$PROJ_DIR/venv/bin/python" ]; then
+    osascript -e 'display alert "Setup Required" message "Please run setup.command before launching the app for the first time." buttons {"OK"} default button "OK"'
+    # Open a terminal and run setup
+    osascript -e "tell application \"Terminal\" to do script \"cd '$PROJ_DIR' && bash setup.command\""
+    exit 0
+fi
+
+# ── Stop any previous server on port 8080 ────────────────────────────────────
+PREV=$(lsof -ti:8080 2>/dev/null)
+if [ -n "$PREV" ]; then
+    kill -9 $PREV 2>/dev/null
+    sleep 0.5
+fi
+
+# ── Start server ──────────────────────────────────────────────────────────────
+"$PROJ_DIR/venv/bin/python" "$PROJ_DIR/launcher.py" &
+SERVER_PID=$!
+
+# ── Wait for server ───────────────────────────────────────────────────────────
+for i in $(seq 1 30); do
+    if curl -sf http://localhost:8766 > /dev/null 2>&1; then
+        break
+    fi
+    sleep 0.5
+done
+
+# ── Open browser ──────────────────────────────────────────────────────────────
+open http://localhost:8766
+
+# Keep app alive while server runs (no visible window — server runs silently)
+wait $SERVER_PID

@@ -326,7 +326,6 @@ PROFILE_PAGE = """<!DOCTYPE html>
       <input type="password" name="mica_pass" value="{mica_pass}" placeholder="Your Mica password" autocomplete="new-password">
     </div>
     <button class="btn" type="submit">Save Credentials</button>
-    <a class="btn-secondary" href="/auth/logout">Sign Out</a>
     {success_html}
   </form>
 </div>

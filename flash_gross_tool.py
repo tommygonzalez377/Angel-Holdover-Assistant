@@ -609,27 +609,41 @@ def _parse_one_per_line(raw: str):
     # e.g. preamble lines "David", "Solo Mio" then "THEATRE" header, then
     # alternating: TheatreName(City,ST) / Action [/ Action2 for film2] ...
     # Theatre lines identified by "(City, ST)" suffix; everything else = action.
+    # Variant: after "THEATRE" there may be extra header cols like "DMA", "2/6",
+    # "12/19" (date columns grouping preamble films); DMA "City, ST" rows skipped.
     import re as _re_th
     _th_hdr_idx_fgt = None
     _fv_fgt = [l.strip() for l in raw.splitlines() if l.strip()]
+    _CSTP_fgt = _re_th.compile(r'\([^,)]+,\s*[A-Z]{2}\)\s*$')
     for _thi_fgt, _thv_fgt in enumerate(_fv_fgt[:8]):
         if _thv_fgt.lower() in ('theatre', 'theater'):
-            _nxt = _fv_fgt[_thi_fgt + 1:_thi_fgt + 3]
-            if any(_re_th.search(r'\([^,)]+,\s*[A-Z]{2}\)', _v) for _v in _nxt):
+            # Look ahead up to 8 values for a (City, ST) line
+            if any(_CSTP_fgt.search(_v) for _v in _fv_fgt[_thi_fgt + 1:_thi_fgt + 10]):
                 _th_hdr_idx_fgt = _thi_fgt
                 break
     if _th_hdr_idx_fgt is not None:
         _preamble_fgt  = _fv_fgt[:_th_hdr_idx_fgt]
         _data_fgt2     = _fv_fgt[_th_hdr_idx_fgt + 1:]
-        _CSTP_fgt      = _re_th.compile(r'\([^,)]+,\s*[A-Z]{2}\)\s*$')
         _CSEX_fgt      = _re_th.compile(r'\(([^,)]+,\s*[A-Z]{2})\)\s*$')
+        # DMA "City, ST" lines (no parens) that follow each theatre row — skip them
+        _DMA_PAT_fgt   = _re_th.compile(r'^[^()]+,\s*[A-Z]{2}\s*$')
+        # Date column headers like "2/6", "12/19" that precede first theatre line
+        _DATE_PAT_fgt  = _re_th.compile(r'^\d{1,2}/\d{1,2}$')
+        _pre_th_fgt = []
+        for _v in _data_fgt2:
+            if _CSTP_fgt.search(_v):
+                break
+            _pre_th_fgt.append(_v)
+        _date_cols_fgt = [v for v in _pre_th_fgt if _DATE_PAT_fgt.match(v)]
+        _ndcols_fgt    = len(_date_cols_fgt)
+        _grp_fgt       = max(1, len(_preamble_fgt) // _ndcols_fgt) if _ndcols_fgt > 0 else 0
         _blocks_fgt, _cn_fgt, _ca_fgt = [], None, []
         for _v in _data_fgt2:
             if _CSTP_fgt.search(_v):
                 if _cn_fgt is not None:
                     _blocks_fgt.append((_cn_fgt, _ca_fgt))
                 _cn_fgt, _ca_fgt = _v, []
-            elif _cn_fgt is not None:
+            elif _cn_fgt is not None and not _DMA_PAT_fgt.match(_v):
                 _ca_fgt.append(_v)
         if _cn_fgt is not None:
             _blocks_fgt.append((_cn_fgt, _ca_fgt))
@@ -637,27 +651,59 @@ def _parse_one_per_line(raw: str):
         for _nm_f, _acts_f in _blocks_fgt:
             if not _acts_f:
                 continue
-            _cme_f = _CSEX_fgt.search(_nm_f)
-            _city_f = _cme_f.group(1).strip() if _cme_f else ""
+            _cme_f   = _CSEX_fgt.search(_nm_f)
+            _city_f  = _cme_f.group(1).strip() if _cme_f else ""
             _clean_f = _CSEX_fgt.sub("", _nm_f).strip()
-            if len(_preamble_fgt) >= 2 and len(_acts_f) >= 2:
-                _pairs_f = list(zip(_preamble_fgt, _acts_f))
-            else:
-                _pairs_f = [(_preamble_fgt[0] if _preamble_fgt else "", _acts_f[0])]
-            for _film_f, _act_f in _pairs_f:
-                _al_f = _act_f.lower()
-                if 'final' in _al_f:
-                    _action_f = 'Final'
-                elif 'hold' in _al_f:
-                    _action_f = 'Hold'
+            def _emit_fgt(film, act):
+                _al = act.lower()
+                if 'final' in _al:
+                    _af = 'Final'
+                elif 'hold' in _al:
+                    _af = 'Hold'
                 else:
-                    continue
-                _rows_fgt2.append([_clean_f, _city_f, _film_f, _action_f, _act_f])
+                    return
+                _rows_fgt2.append([_clean_f, _city_f, film, _af, act])
+            if _ndcols_fgt > 0 and _grp_fgt > 0:
+                for _ai, _act_f in enumerate(_acts_f):
+                    _fs = _ai * _grp_fgt
+                    _fe = (_ai + 1) * _grp_fgt if _ai < _ndcols_fgt - 1 else len(_preamble_fgt)
+                    for _film_f in _preamble_fgt[_fs:_fe]:
+                        _emit_fgt(_film_f, _act_f)
+            elif len(_preamble_fgt) >= 2 and len(_acts_f) >= 2:
+                for _film_f, _act_f in zip(_preamble_fgt, _acts_f):
+                    _emit_fgt(_film_f, _act_f)
+            else:
+                for _film_f in (_preamble_fgt or [""]):
+                    _emit_fgt(_film_f, _acts_f[0])
         if _rows_fgt2:
             print(f"  [theatre-hdr] parsed {len(_rows_fgt2)} rows", flush=True)
             return pd.DataFrame(_rows_fgt2,
                                 columns=['Theatre', 'City', 'Film', 'Action', 'Terms'],
                                 dtype=str)
+
+    # ── Headerless "Theatre  Film  Action" 3-column format ─────────────────
+    # Some bookers send a plain 3-column sheet with no headers:
+    # short theatre/city name | film title | Hold/Final/Open
+    # Columns separated by 2+ spaces or a tab.
+    import re as _re_ma
+    _SPLIT_MA_FGT = _re_ma.compile(r'\t|\s{2,}')
+    _HFO_MA_FGT   = {'hold', 'final', 'open'}
+    _ma_samp_fgt  = [_SPLIT_MA_FGT.split(v.strip()) for v in first_vals[:8]]
+    _ma_hits_fgt  = [c for c in _ma_samp_fgt if len(c) == 3 and c[2].strip().lower() in _HFO_MA_FGT]
+    if len(_ma_hits_fgt) >= 2 and len(_ma_hits_fgt) >= len(_ma_samp_fgt) * 0.6:
+        _rows_ma_fgt = []
+        for _v in first_vals:
+            _cols_ma = _SPLIT_MA_FGT.split(_v.strip())
+            if len(_cols_ma) < 3:
+                continue
+            _act_ma = _cols_ma[2].strip().lower()
+            if _act_ma not in ('hold', 'final'):
+                continue
+            _rows_ma_fgt.append([_cols_ma[0].strip(), _cols_ma[1].strip(),
+                                  'Final' if _act_ma == 'final' else 'Hold'])
+        if _rows_ma_fgt:
+            print(f"  [ma-3col] parsed {len(_rows_ma_fgt)} rows", flush=True)
+            return pd.DataFrame(_rows_ma_fgt, columns=['Theatre', 'Film', 'Action'], dtype=str)
 
     # ── standard formats below ─────────────────────────────────────────────
     values = [l.strip() for l in raw.splitlines() if l.strip()]
@@ -1121,7 +1167,50 @@ VENUE_ALIASES: dict[str, str] = {
     "cinemark 22 + imax, lancaster":      "cinemark lancaster 22",
     "cinemark 16 +xd, victorville":       "cinemark victorville 16 + xd",
     "landmark 12 surrey":                 "landmark guildford 12",
+    # ── Cinemark Taylor Reynolds circuit (grayed-out venues) ─────────────────
+    "las vegas samstown 18":              "cinemark century 18 sam's town (las vegas)",
+    "las vegas santa fe station 16 + xd": "cinemark century las vegas santa fe station 16 + xd",
+    "sugarhouse movies 10":               "cinemark sugarhouse salt lake city 10",
+    "cinemark layton and xd":             "cinemark layton 7 + xd",
+    "cinemark west valley + xd":          "cinemark west valley 10 + xd",
+    "tucson park place 20 + xd":          "cinemark century park place 20 + xd",
+    "century tucson marketplace and xd":  "cinemark century tucson marketplace  14+ xd",
+    "imperial valley 14":                 "cinemark century imperial valley mall 14 (elcentro)",
+    "cinemark 16, mesa":                  "cinemark mesa 16",
+    "cinemark 16, provo":                 "cinemark provo 16",
+    "reno parklane 16":                   "cinemark century park lane 16 (reno)",
+    # ── Cinemark Pacific NW ───────────────────────────────────────────────────
+    "lincoln square cinema with imax":    "cinemark lincoln square cinemas imax 16",
+    "lincoln square cinema bistro 6":     "cinemark reserve lincoln square dine-in 6",
+    "cinemark totem lake + xd":           "cinemark village at totem lake 8",
+    "century walla walla grand cinema 12":"cinemark walla walla grand cinema12",
 }
+
+# Direct Rentrak ID overrides — booking name → {rentrak_id, venue}.
+# Bypasses the alias+normalize chain for theatres whose names don't resolve cleanly.
+# Rentrak IDs verified against master_list_cache.csv.
+_RENTRAK_DIRECT: dict[str, dict] = {
+    "las vegas samstown 18":              {"rentrak_id": "9023",   "venue": "Cinemark Century 18 Sam's Town (Las Vegas)"},
+    "reno parklane 16":                   {"rentrak_id": "8313",   "venue": "Cinemark Century Park Lane 16 (Reno)"},
+    "sugarhouse movies 10":               {"rentrak_id": "7922",   "venue": "Cinemark Sugarhouse Salt Lake City 10"},
+    "cinemark layton and xd":             {"rentrak_id": "5944",   "venue": "Cinemark Layton 7 + XD"},
+    "cinemark west valley + xd":          {"rentrak_id": "991544", "venue": "Cinemark West Valley 10 + XD"},
+    "tucson park place 20 + xd":          {"rentrak_id": "9149",   "venue": "Cinemark Century Park Place 20 + XD"},
+    "century tucson marketplace and xd":  {"rentrak_id": "991804", "venue": "Cinemark Century Tucson Marketplace  14+ XD"},
+    "imperial valley 14":                 {"rentrak_id": "989910", "venue": "Cinemark Century Imperial Valley Mall 14 (ElCentro)"},
+    "las vegas santa fe station 16 + xd": {"rentrak_id": "989919", "venue": "Cinemark Century Las Vegas Santa Fe Station 16 + XD"},
+    "cinemark 16":                        {"rentrak_id": "990186", "venue": "Cinemark Mesa 16"},   # disambiguated by city below
+    "lincoln square cinema with imax":    {"rentrak_id": "990937", "venue": "Cinemark Lincoln Square Cinemas IMAX 16"},
+    "lincoln square cinema bistro 6":     {"rentrak_id": "991855", "venue": "Cinemark Reserve Lincoln Square Dine-In 6"},
+    "cinemark totem lake + xd":           {"rentrak_id": "992368", "venue": "Cinemark Village at Totem Lake 8"},
+    "century walla walla grand cinema 12":{"rentrak_id": "8836",   "venue": "Cinemark Walla Walla Grand Cinema12"},
+}
+# City-qualified overrides for ambiguous names (e.g. "Cinemark 16" appears in multiple cities)
+_RENTRAK_DIRECT_CITY: dict[str, dict] = {
+    "cinemark 16|mesa":   {"rentrak_id": "990186", "venue": "Cinemark Mesa 16"},
+    "cinemark 16|provo":  {"rentrak_id": "8707",   "venue": "Cinemark Provo 16"},
+}
+
 
 def _normalize_venue(name: str) -> str:
     """Lowercase, strip common chain prefix variants, punctuation, collapse whitespace."""
@@ -1171,10 +1260,31 @@ def _parse_master_list_csv(csv_text: str) -> dict:
 def _name_lookup_fallback(master_lookup: dict, theatre: str, city: str = "") -> dict | None:
     """
     Try to find a master list entry by venue name when the Unit # is unknown.
+    0. Direct Rentrak override dict (city-qualified first, then plain).
     1. Exact normalized match (after stripping AMC prefix variants).
     2. Word-overlap: all words in the booking name appear in the master list name.
     Returns the entry dict or None.
     """
+    # 0. Direct Rentrak ID overrides — fastest, most reliable path
+    _bk = theatre.lower().strip()
+    # Strip trailing "(City, ST)" suffix if still embedded in the theatre name
+    # (happens when the booking is parsed as TSV with Theatre/DMA/Action cols
+    #  rather than being split into separate Theatre + City columns)
+    _bk_clean = re.sub(r'\s*\([^)]+,\s*[a-z]{2}\)\s*$', '', _bk).strip()
+    # Use embedded city if no explicit city arg was provided
+    _city_from_name = ''
+    _city_match = re.search(r'\(([^)]+),\s*([a-z]{2})\)\s*$', _bk)
+    if _city_match:
+        _city_from_name = _city_match.group(1).strip()
+    _effective_city = city.lower().split(',')[0].strip() or _city_from_name
+    _city_key = f"{_bk_clean}|{_effective_city}"
+    if _city_key in _RENTRAK_DIRECT_CITY:
+        return _RENTRAK_DIRECT_CITY[_city_key]
+    if _bk_clean in _RENTRAK_DIRECT:
+        return _RENTRAK_DIRECT[_bk_clean]
+    if _bk in _RENTRAK_DIRECT:
+        return _RENTRAK_DIRECT[_bk]
+
     name_lookup: dict = master_lookup.get("__name_lookup__", {})
     name_words: list  = master_lookup.get("__name_words__", [])
 
@@ -1452,6 +1562,7 @@ def scrape_all_films(page, rentrak_id: str, week_date: str, angel_title: str) ->
         raw = {"headers": [], "rows": [], "valid_as_of": "", "no_data": False}
         import time as _time
         _deadline = _time.time() + 90
+        _last_row_count = -1
         while _time.time() < _deadline:
             snippet = page.evaluate("() => document.body.innerText.slice(0, 500)")
             if "Preparing Data" in snippet or "Loading" in snippet:
@@ -1459,8 +1570,16 @@ def scrape_all_films(page, rentrak_id: str, week_date: str, angel_title: str) ->
                 page.wait_for_timeout(3_000)
                 continue
             raw = page.evaluate(_EXTRACT_JS)
-            if raw.get("rows") or raw.get("no_data"):
+            if raw.get("no_data"):
                 break
+            _cur_count = len(raw.get("rows", []))
+            if _cur_count > 0:
+                if _cur_count == _last_row_count:
+                    break  # row count stable — full table loaded
+                _last_row_count = _cur_count
+                # Wait briefly and re-check: Comscore may render rows incrementally
+                page.wait_for_timeout(1_500)
+                continue
             # Page loaded but 0 rows — table may still be rendering; wait and retry
             print(f"  Page loaded but 0 rows — waiting 3s for table to render...")
             page.wait_for_timeout(3_000)

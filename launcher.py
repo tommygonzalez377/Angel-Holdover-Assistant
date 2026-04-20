@@ -33,11 +33,18 @@ try:
     _db.init_db()
     _db.seed_aliases_if_empty()
     _AUTH_ENABLED = bool(os.getenv('GOOGLE_CLIENT_ID'))
+    # In local mode, ensure a real DB row exists for the single local user
+    if not _AUTH_ENABLED:
+        _LOCAL_USER = _db.get_or_create_local_user()
+        _LOCAL_USER_ID = _LOCAL_USER['id']
+    else:
+        _LOCAL_USER_ID = 0
 except Exception as _e:
     print(f'[launcher] DB/auth init failed: {_e}')
     _db = None
     _auth = None
     _AUTH_ENABLED = False
+    _LOCAL_USER_ID = 0
 
 PORT       = int(os.getenv('PORT', '8766'))
 BASE_DIR   = Path(__file__).parent
@@ -417,7 +424,7 @@ HTML = r"""<!DOCTYPE html>
   #mica-contact::placeholder { color: rgba(255,255,255,0.35); }
 
   /* ── Demo / Production toggle ─────────────────────────────────────────── */
-  #mica-mode-toggle {
+  #mica-mode-toggle, #booking-mode-toggle, #mass-mode-toggle {
     display: flex; gap: 8px; margin-top: 12px;
   }
   .mode-btn {
@@ -428,7 +435,7 @@ HTML = r"""<!DOCTYPE html>
   }
   .mode-btn:hover { border-color: rgba(255,255,255,0.4); color: rgba(255,255,255,0.8); }
   .mode-btn.active { background: rgba(0,201,212,0.18); border-color: #00c9d4; color: #00c9d4; }
-  #mode-prod.active { background: rgba(255,160,50,0.18); border-color: #ffa032; color: #ffa032; }
+  #mode-prod.active, #bmode-prod.active, #mmode-prod.active { background: rgba(255,160,50,0.18); border-color: #ffa032; color: #ffa032; }
 
   /* ── Footer ──────────────────────────────────────────────────────────── */
   #page-footer {
@@ -460,12 +467,15 @@ HTML = r"""<!DOCTYPE html>
   </div>
 </header>
 <script>
-  // Show user nav if logged in
+  // Show user nav / credential banner
   fetch('/auth/me').then(r=>r.json()).then(d=>{
     if(d.auth){
-      document.getElementById('user-email').textContent = d.email;
+      if(!d.local){
+        // Server mode: show email and sign-out
+        document.getElementById('user-email').textContent = d.email;
+        document.getElementById('logout-link').style.display='inline';
+      }
       document.getElementById('profile-link').style.display='inline';
-      document.getElementById('logout-link').style.display='inline';
       if(!d.has_comscore || !d.has_mica){
         const banner = document.createElement('div');
         banner.style.cssText='background:#e65100;color:#fff;padding:10px 32px;font-size:13px;';
@@ -1618,7 +1628,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 user = _auth.require_auth(self)
                 if not user: return
             else:
-                user = {'id': 0, 'email': 'local', 'name': 'Local User'}
+                user = {'id': _LOCAL_USER_ID, 'email': 'local', 'name': 'Local User'}
             creds = _db.get_credentials(user['id']) if _db else {}
             self._send_html(_auth.render_profile_page(user, creds))
             return
@@ -1638,7 +1648,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         elif self.path == '/auth/me':
             if not _AUTH_ENABLED:
-                self._json({'auth': False})
+                # Local mode — always "logged in" as the single local user
+                creds = _db.get_credentials(_LOCAL_USER_ID) if _db else {}
+                self._json({'auth': True, 'local': True, 'email': '', 'name': '',
+                            'has_comscore': bool(creds.get('comscore_user')),
+                            'has_mica': bool(creds.get('mica_user'))})
                 return
             user = _auth.get_session_user(self)
             if user:
@@ -1703,7 +1717,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 user = _auth.require_auth(self)
                 if not user: return
             else:
-                user = {'id': 0, 'email': 'local', 'name': 'Local User'}
+                user = {'id': _LOCAL_USER_ID, 'email': 'local', 'name': 'Local User'}
             length = int(self.headers.get('Content-Length', 0))
             body   = self.rfile.read(length).decode('utf-8')
             import urllib.parse as _up
@@ -1762,12 +1776,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             csv_path = BASE_DIR / filename
             csv_path.write_bytes(content)
 
-            # Get user credentials from DB if auth is enabled
+            # Get user credentials from DB
             user_creds = {}
-            if _db and _auth:
-                user = _auth.get_session_user(self)
-                if user:
-                    user_creds = _db.get_credentials(user['id'])
+            if _db:
+                if _AUTH_ENABLED and _auth:
+                    user = _auth.get_session_user(self)
+                    if user:
+                        user_creds = _db.get_credentials(user['id'])
+                else:
+                    user_creds = _db.get_credentials(_LOCAL_USER_ID)  # local mode: single user
 
             print(f'[upload] file={filename} creds=comscore:{bool(user_creds.get("comscore_user"))} mica:{bool(user_creds.get("mica_user"))}', flush=True)
             job_id = str(int(time.time() * 1000))
@@ -1802,12 +1819,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             booking_path = BASE_DIR / 'mica_booking.csv'
             booking_path.write_text(booking, encoding='utf-8')
 
-            # Get user credentials from DB if auth is enabled
+            # Get user credentials from DB
             user_creds = {}
-            if _db and _auth:
-                user = _auth.get_session_user(self)
-                if user:
-                    user_creds = _db.get_credentials(user['id'])
+            if _db:
+                if _AUTH_ENABLED and _auth:
+                    user = _auth.get_session_user(self)
+                    if user:
+                        user_creds = _db.get_credentials(user['id'])
+                else:
+                    user_creds = _db.get_credentials(_LOCAL_USER_ID)  # local mode: single user
 
             print(f'[mica-update] contact={contact!r} creds=mica:{bool(user_creds.get("mica_user"))}', flush=True)
             job_id = 'mica_' + str(int(time.time() * 1000))
@@ -1844,12 +1864,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             booking_path = BASE_DIR / 'booking_plan_input.txt'
             booking_path.write_text(booking, encoding='utf-8')
 
-            # Get user credentials from DB if auth is enabled
+            # Get user credentials from DB
             user_creds = {}
-            if _db and _auth:
-                user = _auth.get_session_user(self)
-                if user:
-                    user_creds = _db.get_credentials(user['id'])
+            if _db:
+                if _AUTH_ENABLED and _auth:
+                    user = _auth.get_session_user(self)
+                    if user:
+                        user_creds = _db.get_credentials(user['id'])
+                else:
+                    user_creds = _db.get_credentials(_LOCAL_USER_ID)  # local mode: single user
 
             job_id = 'bp_' + str(int(time.time() * 1000))
             _job_queues[job_id] = queue.Queue()

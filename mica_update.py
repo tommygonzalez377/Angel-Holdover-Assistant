@@ -632,48 +632,100 @@ def parse_booking_csv(path: Path) -> list[dict]:
         )
         if _is_theatre_hdr:
             _preamble_films_th = [l.strip() for l in lines[:header_idx] if l.strip()]
-            _CITY_ST_th = _re_pbc.compile(r'\([^,)]+,\s*[A-Z]{2}\)\s*$')
-            _CITY_EX_th = _re_pbc.compile(r'\(([^,)]+,\s*[A-Z]{2})\)\s*$')
+            _CITY_ST_th  = _re_pbc.compile(r'\([^,)]+,\s*[A-Z]{2}\)\s*$')
+            _CITY_EX_th  = _re_pbc.compile(r'\(([^,)]+,\s*[A-Z]{2})\)\s*$')
+            # DMA "City, ST" lines (no parens) that follow each theatre row
+            _DMA_PAT_th  = _re_pbc.compile(r'^[^()]+,\s*[A-Z]{2}\s*$')
+            # Date column headers like "2/6", "12/19"
+            _DATE_PAT_th = _re_pbc.compile(r'^\d{1,2}/\d{1,2}$')
             _all_th = [l.strip() for l in content.splitlines() if l.strip()][1:]
-            # Collect blocks of (theatre_name, [action, ...])
+            # Detect date-column headers appearing before the first theatre line.
+            # e.g. ["DMA", "2/6", "12/19"] → 2 date columns, groups preamble films.
+            _pre_th_vals = []
+            for _v in _all_th:
+                if _CITY_ST_th.search(_v):
+                    break
+                _pre_th_vals.append(_v)
+            _date_cols_th = [v for v in _pre_th_vals if _DATE_PAT_th.match(v)]
+            _ndcols_th    = len(_date_cols_th)
+            _grp_th       = max(1, len(_preamble_films_th) // _ndcols_th) if _ndcols_th > 0 else 0
+            # Collect blocks of (theatre_name, [action, ...]).
+            # DMA "City, ST" lines (no parens) are skipped.
             _blocks_th, _cur_nm, _cur_ac = [], None, []
             for _v in _all_th:
                 if _CITY_ST_th.search(_v):
                     if _cur_nm is not None:
                         _blocks_th.append((_cur_nm, _cur_ac))
                     _cur_nm, _cur_ac = _v, []
-                elif _cur_nm is not None:
+                elif _cur_nm is not None and not _DMA_PAT_th.match(_v):
                     _cur_ac.append(_v)
             if _cur_nm is not None:
                 _blocks_th.append((_cur_nm, _cur_ac))
-            log(f"  [theatre-hdr] preamble={_preamble_films_th} blocks={len(_blocks_th)}")
+            log(f"  [theatre-hdr] preamble={_preamble_films_th} blocks={len(_blocks_th)} ndcols={_ndcols_th} grp={_grp_th}")
             for _nm, _acts in _blocks_th:
                 if not _acts:
                     continue
                 _cme = _CITY_EX_th.search(_nm)
                 _city_th2 = _cme.group(1).strip() if _cme else ""
                 _clean_th = _CITY_EX_th.sub("", _nm).strip()
-                # Pair actions with films
-                if len(_preamble_films_th) >= 2 and len(_acts) >= 2:
-                    _film_act_pairs = list(zip(_preamble_films_th, _acts))
-                else:
-                    _film_act_pairs = [(_f, _acts[0]) for _f in (_preamble_films_th or [""])]
-                for _film_th2, _act_th in _film_act_pairs:
-                    _al_th = _act_th.lower()
-                    if 'final' in _al_th:
-                        _a_th2 = 'Final'
-                    elif 'hold' in _al_th:
-                        _a_th2 = 'Hold'
+                def _emit_th(film, act):
+                    _al = act.lower()
+                    if 'final' in _al:
+                        _a = 'Final'
+                    elif 'hold' in _al:
+                        _a = 'Hold'
                     else:
-                        continue
-                    _phrase_th2 = _act_th if _a_th2 == 'Hold' else ""
-                    _st_th2 = get_screening_type(_phrase_th2) if _a_th2 == 'Hold' else None
+                        return
+                    _ph = act if _a == 'Hold' else ""
                     results.append({"theatre": _clean_th, "city": _city_th2,
-                                    "action": _a_th2, "film": _film_th2,
-                                    "phrase": _phrase_th2, "screening_type": _st_th2})
+                                    "action": _a, "film": film,
+                                    "phrase": _ph, "screening_type": get_screening_type(_ph) if _a == 'Hold' else None})
+                if _ndcols_th > 0 and _grp_th > 0:
+                    # Date-column grouping: action[i] → preamble_films[i*grp : (i+1)*grp]
+                    for _ai, _act_th in enumerate(_acts):
+                        _fs = _ai * _grp_th
+                        _fe = (_ai + 1) * _grp_th if _ai < _ndcols_th - 1 else len(_preamble_films_th)
+                        for _film_th2 in _preamble_films_th[_fs:_fe]:
+                            _emit_th(_film_th2, _act_th)
+                elif len(_preamble_films_th) >= 2 and len(_acts) >= 2:
+                    for _film_th2, _act_th in zip(_preamble_films_th, _acts):
+                        _emit_th(_film_th2, _act_th)
+                else:
+                    for _film_th2 in (_preamble_films_th or [""]):
+                        _emit_th(_film_th2, _acts[0])
             log(f"  [theatre-hdr] parsed {len(results)} results")
             return results
         # ── End THEATRE header alternating format ─────────────────────────────
+
+        # ── Headerless "Theatre  Film  Action" 3-column format ──────────────────
+        # Some bookers send a plain 3-column sheet with no headers:
+        # short theatre/city name | film title | Hold/Final/Open
+        # Columns separated by 2+ spaces or a tab.
+        _SPLIT_MA = _re_pbc.compile(r'\t|\s{2,}')
+        _HFO_MA   = {'hold', 'final', 'open'}
+        _ma_sample = [_SPLIT_MA.split(l.strip()) for l in stripped_lines[:8] if l.strip()]
+        _ma_hits   = [c for c in _ma_sample if len(c) == 3 and c[2].strip().lower() in _HFO_MA]
+        _is_ma_fmt = len(_ma_hits) >= 2 and len(_ma_hits) >= len(_ma_sample) * 0.6
+        if _is_ma_fmt:
+            log(f"  [ma-3col] detected headerless 3-col format, {len(stripped_lines)} lines")
+            for _line in stripped_lines:
+                _cols = _SPLIT_MA.split(_line.strip())
+                if len(_cols) < 3:
+                    continue
+                _theatre_ma = _cols[0].strip()
+                _film_ma    = _cols[1].strip()
+                _act_raw_ma = _cols[2].strip().lower()
+                if _act_raw_ma == 'final':
+                    _action_ma = 'Final'
+                elif _act_raw_ma == 'hold':
+                    _action_ma = 'Hold'
+                else:
+                    continue
+                results.append({"theatre": _theatre_ma, "city": "", "action": _action_ma,
+                                 "film": _film_ma, "phrase": "", "screening_type": None})
+            log(f"  [ma-3col] parsed {len(results)} results")
+            return results
+        # ── End headerless 3-column format ───────────────────────────────────────
 
         _opl_rows = _parse_one_per_line_to_dicts(content)
         log(f"  [debug] one-per-line returned {len(_opl_rows)} rows; first values: {[l.strip() for l in content.splitlines() if l.strip()][:5]}")
@@ -1665,16 +1717,34 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "valparaiso commons shopping center":     "cinemark at valparaiso 12",
     "cinemark seven bridges":                 "cinemark 7 bridges woodridge 16 imax",
     "cinemark seven bridges, woodridge":      "cinemark 7 bridges woodridge 16 imax",
+    # ── Cinemark Taylor Reynolds circuit (THEATRE-header format) ────────────────
+    "cinemark 16, mesa":                      "cinemark mesa 16",
+    "cinemark 16, provo":                     "cinemark provo 16",
+    "cinemark 24 + xd, west jordan":          "cinemark west jordan 24+xd",
+    "imperial valley 14, el centro":          "cinemark century imperial valley mall 14",
+    "imperial valley 14":                     "cinemark century imperial valley mall 14",
+    "sierra vista 10, sierra vista":          "cinemark sierra vista 10",
+    "sierra vista 10":                        "cinemark sierra vista 10",
+    "cinemark spanish fork + xd, spanish fork": "cinemark spanish fork 8+xd",
+    "cinemark spanish fork + xd":             "cinemark spanish fork 8+xd",
 }
 
 
 def _apply_city_alias(name: str, city: str = "") -> str:
     """Translate booking theatre name to actual venue name if known.
-    Tries city-qualified key first ("name, city") for disambiguation."""
+    Tries city-qualified key first ("name, city") for disambiguation.
+    When city is "City, ST" (includes state), also tries just the city part."""
     if city:
-        combined = f"{name.lower().strip()}, {city.lower().strip()}"
+        city_l = city.lower().strip()
+        combined = f"{name.lower().strip()}, {city_l}"
         if combined in _CITY_VENUE_ALIASES:
             return _CITY_VENUE_ALIASES[combined]
+        # Also try just the city name without the state abbreviation
+        city_only = city_l.split(",")[0].strip()
+        if city_only and city_only != city_l:
+            combined2 = f"{name.lower().strip()}, {city_only}"
+            if combined2 in _CITY_VENUE_ALIASES:
+                return _CITY_VENUE_ALIASES[combined2]
     return _CITY_VENUE_ALIASES.get(name.lower().strip(), name)
 
 
