@@ -2112,6 +2112,12 @@ def _image_to_csv(image_path: Path, q: queue.Queue):
         "\"Hold\" if it contains \"Hold\" or \"Holdover\"; skip all other rows\n"
         "- Phrase: screening type — use \"split\" if \"Split screen\" appears; "
         "\"mats\" if matinee/mats; \"prime\" if prime; leave blank otherwise\n\n"
+        "IMPORTANT — some booking sheets list ALL theatres in a circuit with screen-count columns "
+        "(labeled 2D, 3D, COMBO, Screens, or similar). In these formats:\n"
+        "- A number (e.g. 1, 2, 3) in a screen-count column means that theatre IS playing the film — include it\n"
+        "- The action may appear as a single letter: F or f = Final, H or h = Hold (circled or not)\n"
+        "- If no letter is present but there is a number, default Action to Hold\n"
+        "- Theatres with NO number in any screen-count column are NOT playing — skip them entirely\n\n"
         "Use TAB characters (not commas) to separate columns. "
         "Output ONLY the raw tab-separated lines. First line must be: Theatre\tCity\tAction\tPhrase"
     )
@@ -2204,10 +2210,31 @@ def _excel_to_csv(xlsx_path: Path) -> str:
 # PDF → CSV via pdfplumber
 # ---------------------------------------------------------------------------
 
+def _pdf_render_to_image(pdf_path: Path, q: queue.Queue) -> Path | None:
+    """Render the first page of a PDF to a PNG using pymupdf (for scanned PDFs)."""
+    try:
+        import fitz  # pymupdf
+    except ImportError:
+        q.put('ERROR: pymupdf not installed — run: pip install pymupdf')
+        return None
+    try:
+        doc  = fitz.open(str(pdf_path))
+        page = doc[0]
+        pix  = page.get_pixmap(dpi=150)
+        img_path = pdf_path.with_suffix('.png')
+        pix.save(str(img_path))
+        doc.close()
+        return img_path
+    except Exception as e:
+        q.put(f'ERROR: Could not render PDF to image — {e}')
+        return None
+
+
 def _pdf_to_csv(pdf_path: Path, q: queue.Queue):
     """
-    Extract AMC-style booking table from a PDF and return (csv_path, csv_text).
-    Handles multi-page PDFs; expects columns: Theatre Name + Change Type (or similar).
+    Extract booking table from a PDF and return (csv_path, csv_text).
+    For digital PDFs: uses pdfplumber text extraction.
+    For scanned/image PDFs: falls back to rendering page as image → vision API.
     """
     try:
         import pdfplumber
@@ -2215,7 +2242,7 @@ def _pdf_to_csv(pdf_path: Path, q: queue.Queue):
         q.put('ERROR: pdfplumber not installed — run: python -m pip install pdfplumber')
         return None
 
-    q.put('Reading PDF with pdfplumber ...')
+    q.put('Reading PDF ...')
 
     rows = []
     try:
@@ -2229,7 +2256,10 @@ def _pdf_to_csv(pdf_path: Path, q: queue.Queue):
         return None
 
     if not rows:
-        q.put('ERROR: No tables found in PDF')
+        q.put('No text found in PDF — looks like a scanned document. Trying image analysis ...')
+        img_path = _pdf_render_to_image(pdf_path, q)
+        if img_path:
+            return _image_to_csv(img_path, q)
         return None
 
     # Find the header row — look for a row containing "Theatre" (or "Theater") and some action column
@@ -2295,7 +2325,10 @@ def _pdf_to_csv(pdf_path: Path, q: queue.Queue):
         csv_lines.append(f'{theatre},{action},{phrase}')
 
     if len(csv_lines) <= 1:
-        q.put('ERROR: No Final or Hold rows found in PDF')
+        q.put('No Final/Hold rows found via text extraction — trying image analysis ...')
+        img_path = _pdf_render_to_image(pdf_path, q)
+        if img_path:
+            return _image_to_csv(img_path, q)
         return None
 
     csv_text = '\n'.join(csv_lines)
