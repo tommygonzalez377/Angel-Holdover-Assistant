@@ -8,13 +8,6 @@ A web-based tool for Angel Studios theatrical booking teams. Automates three rep
 
 ---
 
-## Live App
-
-> **https://angel-holdover-assistant.angelapps.io**
-> Requires Twingate. Sign in with your `@angel.com` Google account.
-
----
-
 ## How It Works
 
 ### Holdover Tab
