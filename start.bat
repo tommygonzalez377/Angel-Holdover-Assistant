@@ -14,7 +14,13 @@ if not exist "%PROJ_DIR%\venv\Scripts\python.exe" (
     exit /b 1
 )
 
-:: ── Stop any previous server on port 8080 ────────────────────────────────────
+:: ── Auto-update from GitHub ──────────────────────────────────────────────────
+if exist "%PROJ_DIR%\.git\" (
+    echo Checking for updates...
+    git -C "%PROJ_DIR%" pull --quiet 2>nul && echo OK  Up to date || echo    Could not reach GitHub -- starting anyway
+)
+
+:: ── Stop any previous server on port 8766 ────────────────────────────────────
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr /R ":8080 "') do (
     taskkill /F /PID %%P >nul 2>&1
 )

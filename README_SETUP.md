@@ -17,9 +17,13 @@ A tool for the theatrical booking team. Once set up, you launch it by double-cli
 
 ### Mac
 
-1. **Get the `holdover-tracking` folder** from Tommy or clone the GitHub repo. Save it somewhere convenient (Desktop or Documents).
+1. **Open Terminal** — press `⌘ Space`, type `Terminal`, press Enter. Then run:
+   ```
+   git clone https://github.com/tommygonzalez377/Angel-Holdover-Assistant.git ~/Desktop/Angel-Holdover-Assistant
+   ```
+   This downloads the app to your Desktop. *(You'll need to be invited to the repo by Tommy first.)*
 
-2. **Double-click `setup.command`** — a Terminal window opens and installs everything:
+2. **Double-click `setup.command`** inside the `Angel-Holdover-Assistant` folder — a Terminal window opens and installs everything:
    - Python packages
    - Playwright Chromium browser (~120 MB, one-time download)
 
@@ -31,9 +35,13 @@ A tool for the theatrical booking team. Once set up, you launch it by double-cli
 
 ### Windows
 
-1. **Get the `holdover-tracking` folder** from Tommy or clone the GitHub repo. Save it on your Desktop.
+1. **Install [Git for Windows](https://git-scm.com/download/win)** if you don't have it, then open **Command Prompt** and run:
+   ```
+   git clone https://github.com/tommygonzalez377/Angel-Holdover-Assistant.git %USERPROFILE%\Desktop\Angel-Holdover-Assistant
+   ```
+   *(You'll need to be invited to the repo by Tommy first.)*
 
-2. **Double-click `setup.bat`** — a command window opens and installs everything
+2. **Double-click `setup.bat`** inside the `Angel-Holdover-Assistant` folder — a command window opens and installs everything
 
 3. Setup complete! The window will say "Setup complete!" when finished
 

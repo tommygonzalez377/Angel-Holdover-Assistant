@@ -14,7 +14,13 @@ if [ ! -f "$PROJ_DIR/venv/bin/python" ]; then
     exit 1
 fi
 
-# ── Stop any previous server on port 8080 ────────────────────────────────────
+# ── Auto-update from GitHub ───────────────────────────────────────────────────
+if [ -d "$PROJ_DIR/.git" ]; then
+    echo "Checking for updates..."
+    git -C "$PROJ_DIR" pull --quiet 2>/dev/null && echo "OK  Up to date" || echo "   (Could not reach GitHub — starting anyway)"
+fi
+
+# ── Stop any previous server on port 8766 ────────────────────────────────────
 PREV=$(lsof -ti:8080 2>/dev/null)
 if [ -n "$PREV" ]; then
     echo "Stopping previous server (PID $PREV)..."
