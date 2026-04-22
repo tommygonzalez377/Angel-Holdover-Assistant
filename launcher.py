@@ -1080,10 +1080,16 @@ async function runMica() {
   if (!contact) { alert('Please fill in the Contact / Booker field.'); return; }
   if (!booking) { alert('Please paste the booking data in the text box first.'); return; }
 
+  const btn = document.getElementById('mica-run-btn');
+  btn.disabled = true;
+  btn.textContent = 'Updating Mica...';
+
   const prog = document.getElementById('mica-progress');
   prog.style.display = 'block';
   prog.innerHTML = '';
   prog.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const resetBtn = () => { btn.disabled = false; btn.textContent = 'Update Mica ▶'; };
 
   let job_id;
   try {
@@ -1094,22 +1100,22 @@ async function runMica() {
     });
     const data = await res.json();
     job_id = data.job_id;
-    if (!job_id) { micaAppendLine('ERROR: Server returned no job ID — check credentials in Profile.', 'line-err'); return; }
+    if (!job_id) { micaAppendLine('ERROR: Server returned no job ID — check credentials in Profile.', 'line-err'); resetBtn(); return; }
   } catch (err) {
     micaAppendLine('ERROR: ' + err.message + ' — try refreshing the page.', 'line-err');
-    return;
+    resetBtn(); return;
   }
 
   const src = new EventSource('/mica-stream/' + job_id);
   src.onmessage = e => {
     const line = e.data;
     if (line === '__PING__')           { return; }
-    if (line === '__DONE__')           { src.close(); return; }
-    if (line === '__SUCCESS__')        { src.close(); micaAppendLine('✓ Mica update complete!', 'line-ok'); return; }
-    if (line.startsWith('__ERROR__')) { src.close(); micaAppendLine('ERROR: ' + line.replace('__ERROR__', '').trim(), 'line-err'); return; }
+    if (line === '__DONE__')           { src.close(); resetBtn(); return; }
+    if (line === '__SUCCESS__')        { src.close(); resetBtn(); micaAppendLine('✓ Mica update complete!', 'line-ok'); return; }
+    if (line.startsWith('__ERROR__')) { src.close(); resetBtn(); micaAppendLine('ERROR: ' + line.replace('__ERROR__', '').trim(), 'line-err'); return; }
     micaAppendLine(line);
   };
-  src.onerror = () => { src.close(); micaAppendLine('Connection lost.', 'line-err'); };
+  src.onerror = () => { src.close(); resetBtn(); micaAppendLine('Connection lost.', 'line-err'); };
 }
 
 function micaAppendLine(text, cls) {
