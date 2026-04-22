@@ -741,13 +741,13 @@ def run_booking_plan_update(title: str, contact: str, booking_text: str = ""):
                     n  = mr["selected"]
                     log(f"  Selected {n} matching venue(s)")
                     if n == 0:
-                        log("  WARNING: No matches found — falling back to select all")
-                        _select_all(page)
-                        n = count
+                        log("  WARNING: No venue matches found — skipping to avoid updating all venues")
+                        log("  Tip: check that theatre names in the booking match venues in the Mica plan")
+                        continue
                 else:
-                    log(f"  No theatre list — selecting all {count} filtered venue(s) ...")
-                    _select_all(page)
-                    n = count
+                    log("  WARNING: No theatre list found in booking — skipping to avoid updating all venues")
+                    log("  Tip: make sure the booking text includes theatre names")
+                    continue
 
                 page.wait_for_timeout(800)
                 _screenshot(page, f"bp_{_safe(film)}_selected.png")
@@ -2119,13 +2119,13 @@ def run_mass_booking_plan_update(title: str, booking_text: str = ""):
                         n  = mr["selected"]
                         log(f"  Selected {n} matching venue(s)")
                         if n == 0:
-                            log("  WARNING: No matches found — falling back to select all")
-                            _select_all(page)
-                            n = count
+                            log("  WARNING: No venue matches found — skipping to avoid updating all venues")
+                            log("  Tip: check that theatre names in the booking match venues in the Mica plan")
+                            continue
                     else:
-                        log(f"  No theatre list — selecting all {count} filtered venue(s) ...")
-                        _select_all(page)
-                        n = count
+                        log("  WARNING: No theatre list found in booking — skipping to avoid updating all venues")
+                        log("  Tip: make sure the booking text includes theatre names")
+                        continue
 
                     page.wait_for_timeout(800)
                     _screenshot(page, f"bp_mass_{_safe(film)}_{_safe(contact)}_selected.png")
