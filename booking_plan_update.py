@@ -1474,11 +1474,14 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
                 // before matching — state codes don't appear in venue names and block match.
                 const bwNoState = bw.filter(w => !STATE_CODES.has(w));
                 const bwForScore = bwNoState.length >= 1 ? bwNoState : bw;
-                // Allow single-word match only when the booking reduces to 1 word after
-                // state-code stripping (otherwise a common word like "independence" is
-                // enough to match false positives in larger plans).
-                const minScore = (bwNoState.length < bw.length && bwNoState.length <= 1)
-                                  ? 1 : MIN_SCORE;
+                // Allow single-word match when:
+                //   a) booking reduces to 1 word after state-code stripping, OR
+                //   b) booking reduces to 1 word after stop-word removal (e.g. "Clarion Theatre")
+                // In both cases require a high ratio (≥0.8) to avoid false positives on
+                // large plans where one common word matches many venues.
+                const singleWord = bwForScore.length <= 1;
+                const minScore = singleWord ? 1 : MIN_SCORE;
+                const minRatio = singleWord ? 0.8 : 0;
                 let bestMatched = 0, bestRatio = 0, bestRowIdx = -1, bestText = '';
                 rows.forEach((row, i) => {
                     if (usedIdx.has(i)) return;  // skip already-matched rows
@@ -1488,7 +1491,7 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
                         bestMatched = m; bestRatio = ratio; bestRowIdx = i; bestText = venueTexts[i];
                     }
                 });
-                if (bestRowIdx >= 0 && bestMatched >= minScore) {
+                if (bestRowIdx >= 0 && bestMatched >= minScore && bestRatio >= minRatio) {
                     if (!dryRun) {
                         const cb = rows[bestRowIdx].querySelector('input[type="checkbox"]');
                         if (cb && !cb.checked) { cb.click(); selected++; }
