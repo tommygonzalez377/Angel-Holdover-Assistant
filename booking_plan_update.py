@@ -1628,6 +1628,9 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "lamar mo":          "plaza lamar 1",
     "borger, tx":        "morley borger 5",
     "borger tx":         "morley borger 5",
+    "mountain grove, mo": "fun city 5 cinemas",
+    "mountain grove mo":  "fun city 5 cinemas",
+    "mountain grove":     "fun city 5 cinemas",
 }
 
 
