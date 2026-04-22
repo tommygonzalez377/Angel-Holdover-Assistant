@@ -868,9 +868,13 @@ document.getElementById('booking-paste-area').addEventListener('paste', e => {
   const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
   // Excel copies both image + text — only block if it's a pure image with no text
   const hasText = items.some(i => i.type === 'text/plain' || i.type === 'text/html' || i.type === 'text/csv');
-  if (hasText) return; // let default paste happen
-  const hasImage = items.some(i => i.type.startsWith('image/'));
-  if (hasImage) e.preventDefault(); // pure screenshot — ignore for booking tab
+  if (hasText) return; // let default paste happen — text will appear in textarea
+  const imageItem = items.find(i => i.type.startsWith('image/'));
+  if (imageItem) {
+    e.preventDefault();
+    const blob = imageItem.getAsFile();
+    if (blob) handleBookingFile(new File([blob], 'screenshot.png', { type: 'image/png' }));
+  }
 });
 
 document.getElementById('booking-paste-area').addEventListener('input', () => {
@@ -899,7 +903,12 @@ document.addEventListener('paste', e => {
       e.preventDefault();
       const blob = item.getAsFile();
       const file = new File([blob], 'screenshot.png', { type: 'image/png' });
-      handleFile(file);
+      // Route to the correct tab handler
+      if (document.getElementById('tab-booking').classList.contains('active')) {
+        handleBookingFile(file);
+      } else {
+        handleFile(file);
+      }
       return;
     }
   }
