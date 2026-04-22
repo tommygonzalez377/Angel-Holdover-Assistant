@@ -862,7 +862,8 @@ def run_booking_plan_update(title: str, contact: str, booking_text: str = ""):
             _screenshot(page, "bp_error.png")
             raise
         finally:
-            browser.close()
+            log("\nBrowser left open for review — close it manually when done.")
+            # browser.close()  # kept open so user can verify changes in Mica
 
 
 def _safe(name: str) -> str:
