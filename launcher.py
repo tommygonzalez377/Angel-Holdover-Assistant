@@ -2486,40 +2486,100 @@ def _run_mica(booking_path: Path, contact: str, job_id: str, mode: str = "demo",
 
 
 # ---------------------------------------------------------------------------
+# Booking plan daemon — persistent browser reused across jobs
+# ---------------------------------------------------------------------------
+
+_bp_daemon_proc  = None   # persistent subprocess
+_bp_daemon_env   = None   # env snapshot (to detect credential changes)
+_bp_daemon_mode  = None   # mode used to start daemon
+_bp_daemon_lock  = threading.Lock()
+
+
+def _start_bp_daemon(mode: str, user_creds: dict):
+    """Start the booking plan daemon subprocess and wait for __READY__."""
+    global _bp_daemon_proc, _bp_daemon_env, _bp_daemon_mode
+    env = _build_env(user_creds)
+    proc = subprocess.Popen(
+        [sys.executable, '-u', str(BASE_DIR / 'booking_plan_update.py'), '--daemon', '--mode', mode],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        env=env,
+        cwd=str(BASE_DIR),
+    )
+    # Stream startup output until __READY__
+    startup_lines = []
+    for line in proc.stdout:
+        stripped = line.rstrip()
+        if stripped == '__READY__':
+            break
+        startup_lines.append(stripped)
+    _bp_daemon_proc = proc
+    _bp_daemon_env  = env
+    _bp_daemon_mode = mode
+    return startup_lines
+
+
+def _ensure_bp_daemon(mode: str, user_creds: dict):
+    """Return True if daemon is running (start it if needed). Caller holds _bp_daemon_lock."""
+    global _bp_daemon_proc
+    env = _build_env(user_creds)
+    # Check if already running with same env + mode
+    if (_bp_daemon_proc is not None
+            and _bp_daemon_proc.poll() is None
+            and _bp_daemon_mode == mode
+            and _bp_daemon_env == env):
+        return True
+    # Kill stale daemon if any
+    if _bp_daemon_proc is not None and _bp_daemon_proc.poll() is None:
+        try:
+            _bp_daemon_proc.stdin.write('__QUIT__\n')
+            _bp_daemon_proc.stdin.flush()
+        except Exception:
+            pass
+    _start_bp_daemon(mode, user_creds)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Booking plan runner (background thread)
 # ---------------------------------------------------------------------------
 
 def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str, mode: str = 'demo', user_creds: dict = {}):
+    import json as _json
     q = _job_queues[job_id]
     try:
-        cmd = [
-            sys.executable, '-u',
-            str(BASE_DIR / 'booking_plan_update.py'),
-            '--contact', contact,
-            '--booking', str(booking_path),
-            '--mode', mode,
-        ]
-        if title:
-            cmd += ['--title', title]
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            env=_build_env(user_creds),
-            cwd=str(BASE_DIR),
-        )
-        for line in proc.stdout:
-            q.put(line.rstrip())
-        proc.wait()
-        if proc.returncode == 0:
-            _job_results[job_id] = 'success'
-            q.put('__SUCCESS__')
-        else:
-            _job_results[job_id] = f'error: Booking plan script exited with code {proc.returncode}'
-            q.put(f'__ERROR__ Booking plan script exited with code {proc.returncode}')
+        booking_text = ''
+        if booking_path and Path(booking_path).exists():
+            booking_text = Path(booking_path).read_text(encoding='utf-8-sig', errors='replace')
+
+        with _bp_daemon_lock:
+            _ensure_bp_daemon(mode, user_creds)
+            job_payload = _json.dumps({
+                'title': title,
+                'contact': contact,
+                'booking_text': booking_text,
+            })
+            _bp_daemon_proc.stdin.write(job_payload + '\n')
+            _bp_daemon_proc.stdin.flush()
+
+            for line in _bp_daemon_proc.stdout:
+                stripped = line.rstrip()
+                if stripped == '__JOB_DONE__':
+                    _job_results[job_id] = 'success'
+                    q.put('__SUCCESS__')
+                    break
+                elif stripped.startswith('__JOB_ERROR__'):
+                    msg = stripped.replace('__JOB_ERROR__', '').strip()
+                    _job_results[job_id] = f'error: {msg}'
+                    q.put(f'__ERROR__ {msg}')
+                    break
+                else:
+                    q.put(stripped)
+
     except Exception as exc:
         _job_results[job_id] = f'error: {exc}'
         q.put(f'__ERROR__ {exc}')
