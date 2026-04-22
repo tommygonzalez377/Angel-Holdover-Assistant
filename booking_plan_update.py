@@ -439,6 +439,71 @@ def _is_active_action(action: str) -> bool:
     return False             # Cancelled, Hold, Declined, etc.
 
 
+def _parse_email_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse informal email-style booking where the film title appears as
+    'on FILM TITLE:' or 'for FILM TITLE:' and theatres are listed one per line
+    after the mention, before any paragraph text.
+
+    Example:
+        I've worked out the best grossing situations for you on ANIMAL FARM:
+
+        CineLux - Watsonville
+        CineLux - Scotts Valley
+        CineLux - Morgan Hill
+
+        We will be running our normal Full Schedule...
+    """
+    _PROSE_STARTS = {
+        'i', "i've", "i'll", 'we', 'none', 'please', 'all', 'kindest', 'thank',
+        'the', 'this', 'our', 'your', 'they', 'it', 'if', 'as', 'my', 'no',
+        'not', 'any', 'and', 'but', 'so', 'in', 'at', 'best', 'will', 'would',
+        'can', 'could', 'should', 'may', 'might', 'also', 'with', 'from',
+        'that', 'there', 'here', 'these', 'those', 'sincerely', 'regards',
+        'hi', 'hello', 'dear', 'hey', 'attached', 'see', 'per', 'as',
+    }
+
+    # Match "on FILM TITLE:" or "for FILM TITLE:"
+    m = re.search(
+        r'\b(?:on|for)\s+([A-Z][A-Za-z0-9 \'\-\(\)&\.]+?)\s*:',
+        text,
+        re.MULTILINE,
+    )
+    if not m:
+        return {}
+
+    film = m.group(1).strip()
+    remaining = text[m.end():]
+
+    theatres = []
+    in_block = False
+    for line in remaining.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if in_block:
+                break   # blank line ends the theatre block
+            continue
+
+        first_word = stripped.split()[0].lower().rstrip('.,;:')
+        if first_word in _PROSE_STARTS:
+            if in_block:
+                break
+            continue
+        if len(stripped) > 70:   # paragraph text
+            if in_block:
+                break
+            continue
+
+        in_block = True
+        theatres.append(stripped)
+
+    if not theatres:
+        return {}
+
+    log(f"  [email format] Film: '{film}', {len(theatres)} theatre(s): {theatres}")
+    return {film: [{"theatre": t, "date": None} for t in theatres]}
+
+
 def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     """
     Parse booking text and return:
@@ -490,6 +555,10 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
         date = _parse_action_date(action)   # "MM/DD" or None
         film = film.strip() or preamble_film or "Unknown"
         results.setdefault(film, []).append({"theatre": theatre.strip(), "date": date})
+
+    # Fallback: try email-style booking format if nothing was found
+    if not results:
+        results = _parse_email_booking(text)
 
     return results
 
