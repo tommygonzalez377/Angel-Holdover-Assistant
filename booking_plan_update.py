@@ -728,142 +728,151 @@ def run_booking_plan_update(title: str, contact: str, booking_text: str = ""):
 
     OUTPUT_DIR.mkdir(exist_ok=True)
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=_HEADLESS, slow_mo=_SLOW_MO,
-            args=_BROWSER_ARGS,
-        )
-        ctx_kwargs: dict = {"viewport": {"width": 1440, "height": 900}}
-        if AUTH_FILE.exists():
-            ctx_kwargs["storage_state"] = str(AUTH_FILE)
-            log("Using saved Mica session ...")
-        ctx  = browser.new_context(**ctx_kwargs)
-        page = ctx.new_page()
-        if not _SERVER_MODE:
-            page.bring_to_front()
+    _pw = sync_playwright().start()
+    browser = _pw.chromium.launch(
+        headless=_HEADLESS, slow_mo=_SLOW_MO,
+        args=_BROWSER_ARGS,
+    )
+    ctx_kwargs: dict = {"viewport": {"width": 1440, "height": 900}}
+    if AUTH_FILE.exists():
+        ctx_kwargs["storage_state"] = str(AUTH_FILE)
+        log("Using saved Mica session ...")
+    ctx  = browser.new_context(**ctx_kwargs)
+    page = ctx.new_page()
+    if not _SERVER_MODE:
+        page.bring_to_front()
 
-        try:
-            _navigate_to_plans(page, ctx)
+    try:
+        _navigate_to_plans(page, ctx)
 
-            for film, entries in films_theatres.items():
-                theatre_names = [e["theatre"] for e in entries]
+        for film, entries in films_theatres.items():
+            theatre_names = [e["theatre"] for e in entries]
 
-                log(f"\n{'='*50}")
-                log(f"Film: {film}")
-                log(f"{'='*50}")
-                _screenshot(page, f"bp_{_safe(film)}_start.png")
+            log(f"\n{'='*50}")
+            log(f"Film: {film}")
+            log(f"{'='*50}")
+            _screenshot(page, f"bp_{_safe(film)}_start.png")
 
-                # Return to plans list for each film (except the first)
-                if page.url.rstrip("/") != MICA_PLANS_URL.rstrip("/"):
-                    page.goto(MICA_PLANS_URL, wait_until="domcontentloaded", timeout=30_000)
-                    _dismiss_popups(page)
-                    try:
-                        page.wait_for_selector("table", timeout=10_000)
-                    except PlaywrightTimeout:
-                        pass
-
-                log(f"Looking for plan: '{film}' ...")
-                _search_plans_for_title(page, film)
-                if not _find_and_click_plan(page, film):
-                    log(f"  ERROR: Plan not found for '{film}'")
-                    log(f"  Tip: Verify the title matches exactly in Mica → Sales → Plans")
-                    _screenshot(page, f"bp_{_safe(film)}_not_found.png")
-                    continue
-
-                try:
-                    page.wait_for_url(
-                        lambda url: "/plans/" in url
-                            and url.rstrip("/") != MICA_PLANS_URL.rstrip("/"),
-                        timeout=15_000,
-                    )
-                    page.wait_for_selector("table tbody tr", timeout=15_000)
-                except PlaywrightTimeout:
-                    log("  WARNING: Plan detail page may not have fully loaded")
-
-                log(f"  Plan opened: {page.url}")
+            # Return to plans list for each film (except the first)
+            if page.url.rstrip("/") != MICA_PLANS_URL.rstrip("/"):
+                page.goto(MICA_PLANS_URL, wait_until="domcontentloaded", timeout=30_000)
                 _dismiss_popups(page)
-                page.wait_for_timeout(800)
+                try:
+                    page.wait_for_selector("table", timeout=10_000)
+                except PlaywrightTimeout:
+                    pass
 
-                # Get the plan's default start date (opening Friday)
-                plan_default_date = _get_plan_release_date(page)
-                log(f"  Plan default start date: {plan_default_date or 'unknown'}")
-                _screenshot(page, f"bp_{_safe(film)}_detail.png")
+            log(f"Looking for plan: '{film}' ...")
+            _search_plans_for_title(page, film)
+            if not _find_and_click_plan(page, film):
+                log(f"  ERROR: Plan not found for '{film}'")
+                log(f"  Tip: Verify the title matches exactly in Mica → Sales → Plans")
+                _screenshot(page, f"bp_{_safe(film)}_not_found.png")
+                continue
 
-                # Filter by Buyer
-                log(f"  Filtering by Contact Person: {contact!r} ...")
-                _filter_by_buyer(page, contact)
-                _screenshot(page, f"bp_{_safe(film)}_filtered.png")
+            try:
+                page.wait_for_url(
+                    lambda url: "/plans/" in url
+                        and url.rstrip("/") != MICA_PLANS_URL.rstrip("/"),
+                    timeout=15_000,
+                )
+                page.wait_for_selector("table tbody tr", timeout=15_000)
+            except PlaywrightTimeout:
+                log("  WARNING: Plan detail page may not have fully loaded")
 
-                # Expand page size so all filtered venues are in the DOM
-                _expand_table_page_size(page)
+            log(f"  Plan opened: {page.url}")
+            _dismiss_popups(page)
+            page.wait_for_timeout(800)
 
-                count = _count_table_rows(page)
-                log(f"  Venues for {contact!r}: {count}")
-                if count == 0:
-                    log(f"  WARNING: No venues found for '{contact}' — skipping")
+            # Get the plan's default start date (opening Friday)
+            plan_default_date = _get_plan_release_date(page)
+            log(f"  Plan default start date: {plan_default_date or 'unknown'}")
+            _screenshot(page, f"bp_{_safe(film)}_detail.png")
+
+            # Filter by Buyer
+            log(f"  Filtering by Contact Person: {contact!r} ...")
+            _filter_by_buyer(page, contact)
+            _screenshot(page, f"bp_{_safe(film)}_filtered.png")
+
+            # Expand page size so all filtered venues are in the DOM
+            _expand_table_page_size(page)
+
+            count = _count_table_rows(page)
+            log(f"  Venues for {contact!r}: {count}")
+            if count == 0:
+                log(f"  WARNING: No venues found for '{contact}' — skipping")
+                continue
+
+            # Select matching venues
+            if theatre_names:
+                log(f"  Matching {len(theatre_names)} theatre(s) from booking sheet ...")
+                mr = _select_matching_venues(page, theatre_names)
+                n  = mr["selected"]
+                log(f"  Selected {n} matching venue(s)")
+                if n == 0:
+                    log("  WARNING: No venue matches found — skipping to avoid updating all venues")
+                    log("  Tip: check that theatre names in the booking match venues in the Mica plan")
                     continue
+            else:
+                log("  WARNING: No theatre list found in booking — skipping to avoid updating all venues")
+                log("  Tip: make sure the booking text includes theatre names")
+                continue
 
-                # Select matching venues
-                if theatre_names:
-                    log(f"  Matching {len(theatre_names)} theatre(s) from booking sheet ...")
-                    mr = _select_matching_venues(page, theatre_names)
-                    n  = mr["selected"]
-                    log(f"  Selected {n} matching venue(s)")
-                    if n == 0:
-                        log("  WARNING: No venue matches found — skipping to avoid updating all venues")
-                        log("  Tip: check that theatre names in the booking match venues in the Mica plan")
-                        continue
+            page.wait_for_timeout(800)
+            _screenshot(page, f"bp_{_safe(film)}_selected.png")
+
+            # Set status → Agreed (wait for Angular to enable the bulk button)
+            page.wait_for_timeout(1_200)
+            log("  Setting status → Agreed ...")
+            _set_agreed(page, n)
+            _screenshot(page, f"bp_{_safe(film)}_agreed.png")
+
+            # Update playweek start dates for non-default openings
+            if not plan_default_date:
+                log("  WARNING: Plan release date unknown — skipping playweek date updates")
+                log("  Tip: check that the plan detail page shows 'Release Date MM/DD/YYYY'")
+            else:
+                non_default = [
+                    e for e in entries
+                    if e.get("date") and _full_date(e["date"], plan_default_date) != plan_default_date
+                ]
+                if non_default:
+                    log(f"  Updating playweek dates for {len(non_default)} venue(s) "
+                        f"with non-default start dates ...")
+                    for e in non_default:
+                        full = _full_date(e["date"], plan_default_date)
+                        log(f"    {e['theatre']}  →  {full}")
+                        _update_venue_playweek(page, e["theatre"], full)
                 else:
-                    log("  WARNING: No theatre list found in booking — skipping to avoid updating all venues")
-                    log("  Tip: make sure the booking text includes theatre names")
-                    continue
+                    log("  All venues open on the default date — no playweek updates needed")
 
-                page.wait_for_timeout(800)
-                _screenshot(page, f"bp_{_safe(film)}_selected.png")
+            _screenshot(page, f"bp_{_safe(film)}_done.png")
 
-                # Set status → Agreed (wait for Angular to enable the bulk button)
-                page.wait_for_timeout(1_200)
-                log("  Setting status → Agreed ...")
-                _set_agreed(page, n)
-                _screenshot(page, f"bp_{_safe(film)}_agreed.png")
+        log("\n✓ Booking plan update complete!")
 
-                # Update playweek start dates for non-default openings
-                if not plan_default_date:
-                    log("  WARNING: Plan release date unknown — skipping playweek date updates")
-                    log("  Tip: check that the plan detail page shows 'Release Date MM/DD/YYYY'")
-                else:
-                    non_default = [
-                        e for e in entries
-                        if e.get("date") and _full_date(e["date"], plan_default_date) != plan_default_date
-                    ]
-                    if non_default:
-                        log(f"  Updating playweek dates for {len(non_default)} venue(s) "
-                            f"with non-default start dates ...")
-                        for e in non_default:
-                            full = _full_date(e["date"], plan_default_date)
-                            log(f"    {e['theatre']}  →  {full}")
-                            _update_venue_playweek(page, e["theatre"], full)
-                    else:
-                        log("  All venues open on the default date — no playweek updates needed")
+        # Keep browser open for review (local mode only)
+        if not _HEADLESS:
+            log("Browser is open for review — close the browser window when finished.")
+            try:
+                browser.wait_for_event("disconnected", timeout=3_600_000)
+            except Exception:
+                pass
 
-                _screenshot(page, f"bp_{_safe(film)}_done.png")
-
-            log("\n✓ Booking plan update complete!")
-            time.sleep(2)
-
-        except PlaywrightTimeout as exc:
-            log(f"\nERROR: Timeout — {exc}")
-            _screenshot(page, "bp_error.png")
-            raise
-        except SystemExit:
-            raise
-        except Exception as exc:
-            log(f"\nERROR: {exc}")
-            _screenshot(page, "bp_error.png")
-            raise
-        finally:
-            log("\nBrowser left open for review — close it manually when done.")
-            # browser.close()  # kept open so user can verify changes in Mica
+    except PlaywrightTimeout as exc:
+        log(f"\nERROR: Timeout — {exc}")
+        _screenshot(page, "bp_error.png")
+        raise
+    except SystemExit:
+        raise
+    except Exception as exc:
+        log(f"\nERROR: {exc}")
+        _screenshot(page, "bp_error.png")
+        raise
+    finally:
+        try:
+            _pw.stop()
+        except Exception:
+            pass
 
 
 def _safe(name: str) -> str:
