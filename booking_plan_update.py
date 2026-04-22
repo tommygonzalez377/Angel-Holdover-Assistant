@@ -563,6 +563,32 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     return results
 
 
+def parse_bare_theatre_list(text: str, film: str) -> list[dict]:
+    """
+    Parse a plain list of theatre names (one per line) when no booking format
+    is detected. Used when the user pastes just the theatre names and fills in
+    the film title separately in the Title field.
+
+    Skips blank lines, very long lines (paragraph text), and common prose words.
+    Returns [{"theatre": str, "date": None}, ...]
+    """
+    _SKIP_STARTS = {
+        'i', 'we', 'please', 'all', 'the', 'this', 'our', 'your', 'none',
+        'kindest', 'thank', 'regards', 'sincerely', 'hi', 'hello', 'dear',
+        'no', 'not', 'any', 'and', 'but', 'so', 'will', 'would', 'can',
+    }
+    theatres = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or len(stripped) > 80:
+            continue
+        first = stripped.split()[0].lower().rstrip('.,;:')
+        if first in _SKIP_STARTS:
+            continue
+        theatres.append(stripped)
+    return [{"theatre": t, "date": None} for t in theatres]
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -830,7 +856,15 @@ def run_daemon(mode: str = "demo"):
 
                 films_theatres = parse_open_bookings(booking_text)
                 if not films_theatres:
-                    if title:
+                    if title and booking_text.strip():
+                        # Plain list of theatre names — use title from the Title field
+                        bare = parse_bare_theatre_list(booking_text, title)
+                        if bare:
+                            log(f"  Detected plain theatre list — {len(bare)} theatre(s)")
+                            films_theatres = {title: bare}
+                        else:
+                            films_theatres = {title: []}
+                    elif title:
                         films_theatres = {title: []}
                     else:
                         log("ERROR: No films found in booking text")
@@ -842,7 +876,7 @@ def run_daemon(mode: str = "demo"):
                         (k for k in films_theatres
                          if title.lower() in k.lower() or k.lower() in title.lower()), None
                     )
-                    films_theatres = {match: films_theatres[match]} if match else {title: []}
+                    films_theatres = {match: films_theatres[match]} if match else {title: films_theatres.get(title, [])}
 
                 # Make sure we're on the plans page before each job
                 if page.url.rstrip("/") != MICA_PLANS_URL.rstrip("/"):
@@ -886,12 +920,17 @@ def run_booking_plan_update(title: str, contact: str, booking_text: str = ""):
     films_theatres = parse_open_bookings(booking_text)
 
     if not films_theatres:
-        if booking_text.strip():
-            log("WARNING: No 'Open' rows found in booking sheet — "
-                "check that Action column contains 'Open'")
-        else:
+        if title and booking_text.strip():
+            # Try plain list of theatre names (pasted without email header)
+            bare = parse_bare_theatre_list(booking_text, title)
+            if bare:
+                log(f"Detected plain theatre list — {len(bare)} theatre(s) for '{title}'")
+                films_theatres = {title: bare}
+            else:
+                log("WARNING: No booking data found — no theatre names detected")
+                films_theatres = {title: []}
+        elif title:
             log("WARNING: No booking text provided")
-        if title:
             films_theatres = {title: []}
         else:
             log("ERROR: Nothing to process. Provide a booking sheet or specify --title")
@@ -905,10 +944,8 @@ def run_booking_plan_update(title: str, contact: str, booking_text: str = ""):
         if match:
             films_theatres = {match: films_theatres[match]}
         else:
-            log(f"WARNING: '{title}' not found in Open rows — "
-                f"found: {list(films_theatres.keys())}")
-            log(f"  Processing '{title}' with no theatre filter (will select all filtered venues)")
-            films_theatres = {title: []}
+            log(f"WARNING: '{title}' not found in parsed rows — using theatre list as-is")
+            films_theatres = {title: films_theatres.get(title, [])}
 
     log(f"Films to process: {list(films_theatres.keys())}")
     for film, entries in films_theatres.items():
