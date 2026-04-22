@@ -1624,6 +1624,10 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "milford ia":        "pioneer milford 1",
     "parsons, ks":       "the parsons theatre",
     "parsons ks":        "the parsons theatre",
+    "lamar, mo":         "plaza lamar 1",
+    "lamar mo":          "plaza lamar 1",
+    "borger, tx":        "morley borger 5",
+    "borger tx":         "morley borger 5",
 }
 
 
@@ -1691,6 +1695,26 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
             let selected = 0;
             const matched = [], missed = [];
             for (const booking of bookingNames) {
+                // Detect "City, ST" or "City ST" format (e.g. "Lamar, MO", "Borger TX")
+                const cityStateMatch = normalize(booking).match(/^([a-z][a-z\\s]+?)\\s*,?\\s*([a-z]{2})$/);
+                const isCityState = cityStateMatch && STATE_CODES.has(cityStateMatch[2]);
+
+                let bestMatched = 0, bestRatio = 0, bestRowIdx = -1, bestText = '';
+
+                if (isCityState) {
+                    // City+state input: match any venue whose name contains the city name
+                    const city = cityStateMatch[1].trim();
+                    rows.forEach((row, i) => {
+                        if (usedIdx.has(i)) return;
+                        if (normalize(venueTexts[i]).includes(city)) {
+                            // Score by how much of the venue name is the city
+                            const ratio = city.split(' ').length / (sigWords(venueTexts[i]).length || 1);
+                            if (bestRowIdx < 0 || ratio > bestRatio) {
+                                bestMatched = 1; bestRatio = ratio; bestRowIdx = i; bestText = venueTexts[i];
+                            }
+                        }
+                    });
+                } else {
                 const bw = sigWords(booking);
                 // For city+state bookings (e.g. "Independence, MO"), strip state codes
                 // before matching — state codes don't appear in venue names and block match.
@@ -1704,7 +1728,6 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
                 const singleWord = bwForScore.length <= 1;
                 const minScore = singleWord ? 1 : MIN_SCORE;
                 const minRatio = singleWord ? 0.8 : 0;
-                let bestMatched = 0, bestRatio = 0, bestRowIdx = -1, bestText = '';
                 rows.forEach((row, i) => {
                     if (usedIdx.has(i)) return;  // skip already-matched rows
                     const { matched: m, ratio } = scoreInfo(venueTexts[i], bwForScore);
@@ -1713,7 +1736,12 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
                         bestMatched = m; bestRatio = ratio; bestRowIdx = i; bestText = venueTexts[i];
                     }
                 });
-                if (bestRowIdx >= 0 && bestMatched >= minScore && bestRatio >= minRatio) {
+                if (!(bestRowIdx >= 0 && bestMatched >= minScore && bestRatio >= minRatio)) {
+                    bestRowIdx = -1;
+                }
+                } // end non-city-state branch
+
+                if (bestRowIdx >= 0) {
                     if (!dryRun) {
                         const cb = rows[bestRowIdx].querySelector('input[type="checkbox"]');
                         if (cb && !cb.checked) { cb.click(); selected++; }
