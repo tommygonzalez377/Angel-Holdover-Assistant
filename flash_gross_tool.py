@@ -1009,9 +1009,14 @@ def load_final_locations(csv_path: str) -> list[dict]:
             _line = _line.strip()
             if not _line:
                 continue
-            _om = _re_amc.search(r'\b\d+\s+Opening\s*[-–]\s*(\d{1,2}/\d{1,2}/\d{4})', _line)
+            # Match Opening (with date) or Holdover/Split screen (no date required)
+            _om = _re_amc.search(
+                r'\b\d+\s+(?:Opening\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4}|Holdover\b|Split\s+[Ss]creen)',
+                _line)
             if not _om:
                 continue
+            _action_str = _om.group(0)
+            _action = 'Hold' if _re_amc.search(r'Holdover|Split', _action_str, _re_amc.I) else 'Open'
             _before = _line[:_om.start()].strip()
             _dma_m = _DMA_RE_amc.search(_before)
             if _dma_m:
@@ -1023,7 +1028,7 @@ def load_final_locations(csv_path: str) -> list[dict]:
             if _th_film and _re_amc.search(r'[a-z]', _th_film.group(2)):
                 _theatre = _th_film.group(1).strip()
             if _theatre and _re_amc.search(r'\d', _theatre):
-                _amc_rows.append({'Theatre': _theatre, 'Action': 'Open'})
+                _amc_rows.append({'Theatre': _theatre, 'Action': _action})
         if _amc_rows:
             df = pd.DataFrame(_amc_rows)
             print(f"  [AMC format] parsed {len(df)} theatres", flush=True)
