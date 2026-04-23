@@ -793,6 +793,10 @@ def load_final_locations(csv_path: str) -> list[dict]:
             if _ln.strip() == target:
                 raw = "".join(lines_all[_li:])
                 break
+    # Save raw BEFORE preamble stripping — AMC preamble contains the format marker
+    # ('AMC Film Programmer') which gets stripped before df parsing begins.
+    _raw_pre_strip = raw
+
     if not _is_dunder:
         HEADER_KEYS = {"action", "policy", "theatre", "theater", "buyer", "br", "film",
                        "attraction", "unit", "comscore", "dma_name", "status"}
@@ -989,8 +993,10 @@ def load_final_locations(csv_path: str) -> list[dict]:
     if df is None:
         df = _parse_one_per_line(raw)
 
-    # 3.5. Try AMC Theatres booking format (before pandas which can't handle variable columns)
-    if df is None and 'AMC Film Programmer' in raw[:600]:
+    # 3.5. Try AMC Theatres booking format (before pandas which can't handle variable columns).
+    # Use _raw_pre_strip for detection — preamble stripper above removes 'AMC Film Programmer'.
+    # Use raw (stripped) for parsing — data rows with Opening anchors are still present.
+    if df is None and 'AMC Film Programmer' in _raw_pre_strip:
         import re as _re_amc
         _DMA_RE_amc = _re_amc.compile(
             r'\b([A-Z]{3}[A-Z0-9\-&\/]*(?:\s+[A-Z]{3}[A-Z0-9\-&\/]*)*)'
@@ -999,7 +1005,7 @@ def load_final_locations(csv_path: str) -> list[dict]:
             r'\s+(?=[A-Z][a-z])'
         )
         _amc_rows = []
-        for _line in raw.splitlines():
+        for _line in _raw_pre_strip.splitlines():
             _line = _line.strip()
             if not _line:
                 continue
