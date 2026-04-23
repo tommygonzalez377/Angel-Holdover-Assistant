@@ -528,6 +528,16 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
     if not is_amc:
         return {}
 
+    # DMA pattern: 3+ consecutive ALL-CAPS chars per word (e.g. "ALBANY", "DALLAS-FORT"),
+    # optional parenthetical (e.g. "(LAS CRUCES)") and ", ST" suffix,
+    # followed by a mixed-case theatre name word.
+    _DMA_RE = re.compile(
+        r'\b([A-Z]{3}[A-Z0-9\-&\/]*(?:\s+[A-Z]{3}[A-Z0-9\-&\/]*)*)'
+        r'(?:\s*\([^)]*\))?'    # optional parenthetical
+        r'(?:,\s*[A-Z]{2})?'   # optional ", ST"
+        r'\s+(?=[A-Z][a-z])'   # followed by Mixed-Case word (theatre name)
+    )
+
     results: dict[str, list[dict]] = {}
     current_film = ''
 
@@ -546,37 +556,24 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
         dm = re.search(r'(\d{1,2})/(\d{1,2})', date_raw)
         action_date = f"{int(dm.group(1)):02d}/{int(dm.group(2)):02d}" if dm else None
 
-        # Strip leading film title (mixed-case, ends before first ALL-CAPS DMA word
-        # or before a theatre name word).  Detect by: starts with uppercase letter,
-        # contains lowercase, does NOT look like a theatre number.
-        ft_m = re.match(
-            r'^([A-Z][A-Za-z0-9 \'\-\(\)&\.]+?)\s+'
-            r'(?=[A-Z]{2,}[\s,\-]|[A-Z][a-z])',
-            before,
-        )
-        if ft_m:
-            candidate = ft_m.group(1).strip()
-            # Confirm it looks like a film title (has lowercase letters, no trailing number)
-            if re.search(r'[a-z]', candidate) and not re.search(r'\d$', candidate):
-                # Normalise: strip format suffix like "- 2D/OC"
-                clean = re.sub(r'\s*[-–]\s*(2D|3D|OC|IMAX|XD|Combo).*', '',
-                               candidate, flags=re.I).strip()
-                current_film = clean
-                before = before[ft_m.end():].strip()
-
-        # Strip leading DMA: sequence of ALL-CAPS words (possibly hyphenated),
-        # optionally followed by ", ST", before a Mixed-Case word.
-        dma_m = re.match(
-            r'^((?:[A-Z][A-Z0-9\-&\/]+)(?:\s+[A-Z][A-Z0-9\-&\/]+)*)(?:,\s*[A-Z]{2})?\s+'
-            r'(?=[A-Z][a-z])',
-            before,
-        )
+        # Find DMA in "before": the film title (if any) appears BEFORE the DMA,
+        # the theatre name AFTER it.  If no DMA is present, "before" is just the theatre.
+        dma_m = _DMA_RE.search(before)
         if dma_m:
-            before = before[dma_m.end():].strip()
+            film_part  = before[:dma_m.start()].strip()
+            theatre    = before[dma_m.end():].strip()
+            # If text before DMA has lowercase letters it's a film title (not a 2-letter DMA word)
+            if film_part and re.search(r'[a-z]', film_part):
+                clean = re.sub(r'\s*[-–]\s*(2D|3D|OC|IMAX|XD|Combo).*',
+                               '', film_part, flags=re.I).strip()
+                if clean:
+                    current_film = clean
+        else:
+            # No DMA on this line — entire "before" is the theatre name
+            theatre = before
 
-        theatre = before.strip()
         if not theatre or not re.search(r'\d', theatre):
-            continue   # theatre name should end with a screen count number
+            continue   # theatre name should contain a screen-count number
 
         film = current_film or 'Unknown'
         results.setdefault(film, []).append({'theatre': theatre, 'date': action_date})
@@ -1630,15 +1627,15 @@ def _filter_by_buyer(page, contact: str):
         inp.fill(contact)
     else:
         page.keyboard.type(contact)
-    page.wait_for_timeout(700)
-    opt = page.locator(
-        f'.ng-option:has-text("{contact}"), [role="option"]:has-text("{contact}")'
-    ).first
+    page.wait_for_timeout(900)
+    # Click the first visible dropdown option (case-insensitive partial match)
+    opt = page.locator('.ng-option:visible, [role="option"]:visible').first
     if opt.count() > 0:
+        opt_text = opt.inner_text().strip()
         opt.click()
-        log(f"  Contact Person filter set: {contact}")
+        log(f"  Contact Person filter set: '{opt_text}'")
     else:
-        log(f"  WARNING: '{contact}' not found in Booker dropdown — pressing Enter")
+        log(f"  WARNING: '{contact}' not found in Contact dropdown — pressing Enter")
         page.keyboard.press("Enter")
     page.wait_for_timeout(1_500)
 
