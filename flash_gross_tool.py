@@ -989,6 +989,39 @@ def load_final_locations(csv_path: str) -> list[dict]:
     if df is None:
         df = _parse_one_per_line(raw)
 
+    # 3.5. Try AMC Theatres booking format (before pandas which can't handle variable columns)
+    if df is None and 'AMC Film Programmer' in raw[:600]:
+        import re as _re_amc
+        _DMA_RE_amc = _re_amc.compile(
+            r'\b([A-Z]{3}[A-Z0-9\-&\/]*(?:\s+[A-Z]{3}[A-Z0-9\-&\/]*)*)'
+            r'(?:\s*\([^)]*\))?'
+            r'(?:,\s*[A-Z]{2})?'
+            r'\s+(?=[A-Z][a-z])'
+        )
+        _amc_rows = []
+        for _line in raw.splitlines():
+            _line = _line.strip()
+            if not _line:
+                continue
+            _om = _re_amc.search(r'\b\d+\s+Opening\s*[-–]\s*(\d{1,2}/\d{1,2}/\d{4})', _line)
+            if not _om:
+                continue
+            _before = _line[:_om.start()].strip()
+            _dma_m = _DMA_RE_amc.search(_before)
+            if _dma_m:
+                _theatre = _before[_dma_m.end():].strip()
+            else:
+                _theatre = _before
+            # Split off any embedded film title after the screen-count number
+            _th_film = _re_amc.match(r'^(.+?\b\d+)\s+([A-Z][A-Za-z].+)$', _theatre)
+            if _th_film and _re_amc.search(r'[a-z]', _th_film.group(2)):
+                _theatre = _th_film.group(1).strip()
+            if _theatre and _re_amc.search(r'\d', _theatre):
+                _amc_rows.append({'Theatre': _theatre, 'Action': 'Open'})
+        if _amc_rows:
+            df = pd.DataFrame(_amc_rows)
+            print(f"  [AMC format] parsed {len(df)} theatres", flush=True)
+
     # 4. Last resort: pandas auto-detect
     if df is None:
         try:
