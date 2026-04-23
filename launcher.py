@@ -2103,7 +2103,15 @@ def _image_to_csv(image_path: Path, q: queue.Queue):
         q.put('ERROR: AI_LABS_API_KEY not set in .env — cannot process image')
         return None
 
-    import urllib.request, urllib.error, time
+    import urllib.request, urllib.error, ssl, time
+
+    # Build an SSL context that works on macOS (Python from python.org ships
+    # without system certs; certifi provides its own trusted CA bundle).
+    try:
+        import certifi as _certifi
+        _ssl_ctx = ssl.create_default_context(cafile=_certifi.where())
+    except ImportError:
+        _ssl_ctx = ssl.create_default_context()
 
     AI_LABS_BASE = 'https://ai-labs.angel-tools.io/api/v1'
     headers_auth = {
@@ -2154,7 +2162,7 @@ def _image_to_csv(image_path: Path, q: queue.Queue):
             headers=headers_auth,
             method='POST',
         )
-        with urllib.request.urlopen(pred_req, timeout=30) as r:
+        with urllib.request.urlopen(pred_req, timeout=30, context=_ssl_ctx) as r:
             pred_data = json.loads(r.read())
     except Exception as e:
         q.put(f'ERROR: AI Labs prediction request failed — {e}')
@@ -2174,7 +2182,7 @@ def _image_to_csv(image_path: Path, q: queue.Queue):
                 headers=headers_auth,
                 method='GET',
             )
-            with urllib.request.urlopen(poll_req, timeout=15) as r:
+            with urllib.request.urlopen(poll_req, timeout=15, context=_ssl_ctx) as r:
                 result = json.loads(r.read())
         except Exception as e:
             q.put(f'ERROR: AI Labs poll failed — {e}')
