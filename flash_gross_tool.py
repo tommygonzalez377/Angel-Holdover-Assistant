@@ -1009,14 +1009,21 @@ def load_final_locations(csv_path: str) -> list[dict]:
             _line = _line.strip()
             if not _line:
                 continue
-            # Match Opening (with date) or Holdover/Split screen (no date required)
+            # Match any AMC change type: gross (may have commas) then action keyword.
+            # Handles: "476 Split screen. Final", "565 Holdover", "0 Opening - 04/30/2026",
+            #          "1,166 Split screen. Holdover", "151 Final - 02/26/2026"
             _om = _re_amc.search(
-                r'\b\d+\s+(?:Opening\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4}|Holdover\b|Split\s+[Ss]creen)',
+                r'\b[\d,]+\s+(?:Split\s+[Ss]creen\.\s+)?(?:Final|Holdover|Opening)\b',
                 _line)
             if not _om:
                 continue
             _action_str = _om.group(0)
-            _action = 'Hold' if _re_amc.search(r'Holdover|Split', _action_str, _re_amc.I) else 'Open'
+            if _re_amc.search(r'Final', _action_str):
+                _action = 'Final'
+            elif _re_amc.search(r'Holdover|Split', _action_str, _re_amc.I):
+                _action = 'Hold'
+            else:
+                _action = 'Open'
             _before = _line[:_om.start()].strip()
             _dma_m = _DMA_RE_amc.search(_before)
             if _dma_m:
