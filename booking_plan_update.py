@@ -504,6 +504,90 @@ def _parse_email_booking(text: str) -> dict[str, list[dict]]:
     return {film: [{"theatre": t, "date": None} for t in theatres]}
 
 
+def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse AMC Theatres booking email format.
+
+    Each theatre row contains an anchor like:
+        Albany 16  0  Opening - 04/30/2026  1  1 total ...
+    or with a leading DMA name:
+        ALBANY, GA  Albany 16  0  Opening - 04/30/2026  ...
+    or with both film title + DMA:
+        Animal Farm  ALBANY, GA  Albany 16  0  Opening - 04/30/2026  ...
+
+    Detection: first ~400 chars contain "AMC Film Programmer" or
+               a column header with "Theatre Name" + "Change Type".
+
+    Returns { film_title: [{"theatre": str, "date": "MM/DD"}, ...] }
+    """
+    header_sample = '\n'.join(text.splitlines()[:15])
+    is_amc = (
+        'AMC Film Programmer' in header_sample
+        or ('Theatre Name' in header_sample and 'Change Type' in header_sample)
+    )
+    if not is_amc:
+        return {}
+
+    results: dict[str, list[dict]] = {}
+    current_film = ''
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        # Anchor: "<digits> Opening - MM/DD/YYYY"
+        m = re.search(r'\b\d+\s+Opening\s*-\s*(\d{1,2}/\d{1,2}/\d{4})', line)
+        if not m:
+            continue
+
+        before = line[:m.start()].strip()
+        date_raw = m.group(1)
+        dm = re.search(r'(\d{1,2})/(\d{1,2})', date_raw)
+        action_date = f"{int(dm.group(1)):02d}/{int(dm.group(2)):02d}" if dm else None
+
+        # Strip leading film title (mixed-case, ends before first ALL-CAPS DMA word
+        # or before a theatre name word).  Detect by: starts with uppercase letter,
+        # contains lowercase, does NOT look like a theatre number.
+        ft_m = re.match(
+            r'^([A-Z][A-Za-z0-9 \'\-\(\)&\.]+?)\s+'
+            r'(?=[A-Z]{2,}[\s,\-]|[A-Z][a-z])',
+            before,
+        )
+        if ft_m:
+            candidate = ft_m.group(1).strip()
+            # Confirm it looks like a film title (has lowercase letters, no trailing number)
+            if re.search(r'[a-z]', candidate) and not re.search(r'\d$', candidate):
+                # Normalise: strip format suffix like "- 2D/OC"
+                clean = re.sub(r'\s*[-–]\s*(2D|3D|OC|IMAX|XD|Combo).*', '',
+                               candidate, flags=re.I).strip()
+                current_film = clean
+                before = before[ft_m.end():].strip()
+
+        # Strip leading DMA: sequence of ALL-CAPS words (possibly hyphenated),
+        # optionally followed by ", ST", before a Mixed-Case word.
+        dma_m = re.match(
+            r'^((?:[A-Z][A-Z0-9\-&\/]+)(?:\s+[A-Z][A-Z0-9\-&\/]+)*)(?:,\s*[A-Z]{2})?\s+'
+            r'(?=[A-Z][a-z])',
+            before,
+        )
+        if dma_m:
+            before = before[dma_m.end():].strip()
+
+        theatre = before.strip()
+        if not theatre or not re.search(r'\d', theatre):
+            continue   # theatre name should end with a screen count number
+
+        film = current_film or 'Unknown'
+        results.setdefault(film, []).append({'theatre': theatre, 'date': action_date})
+
+    if results:
+        for film, rows in results.items():
+            log(f"  [AMC format] Film: '{film}', {len(rows)} theatre(s): "
+                f"{[r['theatre'] for r in rows]}")
+    return results
+
+
 def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     """
     Parse booking text and return:
@@ -555,6 +639,10 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
         date = _parse_action_date(action)   # "MM/DD" or None
         film = film.strip() or preamble_film or "Unknown"
         results.setdefault(film, []).append({"theatre": theatre.strip(), "date": date})
+
+    # Fallback: try AMC booking format
+    if not results:
+        results = _parse_amc_booking(text)
 
     # Fallback: try email-style booking format if nothing was found
     if not results:
