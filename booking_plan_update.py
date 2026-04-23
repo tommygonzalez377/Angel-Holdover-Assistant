@@ -536,8 +536,8 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
         if not line:
             continue
 
-        # Anchor: "<digits> Opening - MM/DD/YYYY"
-        m = re.search(r'\b\d+\s+Opening\s*-\s*(\d{1,2}/\d{1,2}/\d{4})', line)
+        # Anchor: "<digits> Opening - MM/DD/YYYY" (hyphen or em-dash)
+        m = re.search(r'\b\d+\s+Opening\s*[-–]\s*(\d{1,2}/\d{1,2}/\d{4})', line)
         if not m:
             continue
 
