@@ -1775,6 +1775,15 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
                 'odeon','vip','and','xscape','entertainment','centre','center',
                 'et','avec','les','des','cineplex'
             ]);
+            // Circuit/format brand words that inflate AMC/Cinemark venue name word counts.
+            // Stripped from the DENOMINATOR when computing ratio so that a booking like
+            // "Albany 16" (1 sig word: "albany") gets ratio 1/1 = 1.0 against
+            // "AMC CLASSIC Albany 16" instead of 1/3 = 0.33.
+            const CIRCUIT_WORDS = new Set([
+                'amc','classic','imax','dolby','plf','dine','prime','luxe',
+                'max','rpx','xd','btx','alc','epl','cinemark','regal','showcase',
+                'landmark','harkins','reading','marcus','epic','theatres'
+            ]);
             function normalize(s) {
                 // Strip diacritics so French names (é, è, â, etc.) match ASCII versions
                 return s.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
@@ -1796,11 +1805,15 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
                                      && !/^\\d+$/.test(w) && !STOP.has(w));
             }
             // Returns { matched: count, ratio: matched/venueWordCount }
-            // Exact word match only — no startsWith to prevent "st" → "strawberry" bugs
+            // Exact word match only — no startsWith to prevent "st" → "strawberry" bugs.
+            // Ratio uses venue words MINUS circuit brand words so AMC/CLASSIC don't inflate
+            // the denominator and sink single-word bookings like "Albany 16".
             function scoreInfo(venueText, bookingWords) {
                 const rw = sigWords(venueText);
+                const rwForRatio = rw.filter(w => !CIRCUIT_WORDS.has(w));
+                const denom = rwForRatio.length > 0 ? rwForRatio.length : rw.length;
                 const m = bookingWords.filter(w => rw.includes(w)).length;
-                return { matched: m, ratio: rw.length > 0 ? m / rw.length : 0 };
+                return { matched: m, ratio: denom > 0 ? m / denom : 0 };
             }
             const headers = Array.from(document.querySelectorAll('table thead th'))
                                   .map(h => h.textContent.trim().toLowerCase());
@@ -2074,14 +2087,22 @@ def _update_venue_playweek(page, theatre_name: str, new_date: str):
         log(f"  WARNING: Row not found for playweek update: {theatre_name}")
         return
 
-    # Click the Start Date cell (or its link) to open Edit Playweeks modal
-    row = page.locator("table tbody tr").nth(row_idx)
-    date_cell = row.locator("td").nth(col_idx)
-    date_link  = date_cell.locator("a")
-    if date_link.count() > 0:
-        date_link.first.click()
-    else:
-        date_cell.click()
+    # Click the Start Date cell via JS to bypass sticky nav/pagination overlays
+    page.evaluate(
+        """
+        ([rowIdx, colIdx]) => {
+            const rows = document.querySelectorAll('table tbody tr');
+            const row  = rows[rowIdx];
+            if (!row) return;
+            const cells = row.querySelectorAll('td');
+            const cell  = cells[colIdx];
+            if (!cell) return;
+            const target = cell.querySelector('a') || cell;
+            target.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+        }
+        """,
+        [row_idx, col_idx],
+    )
 
     # Wait for Edit Playweeks modal
     try:
