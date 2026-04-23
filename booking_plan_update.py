@@ -569,8 +569,22 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
                 if clean:
                     current_film = clean
         else:
-            # No DMA on this line — entire "before" is the theatre name
+            # No DMA on this line — entire "before" is the theatre name (possibly + film title)
             theatre = before
+
+        # Handle format where film title comes AFTER the theatre number:
+        #   "Albany 16 Animal Farm" or "Barton Creek 14 Animal Farm - 2D/OC"
+        # Split on the screen-count number: everything up to + including the
+        # first number is the theatre; anything after is the film title.
+        th_film_m = re.match(r'^(.+?\b\d+)\s+([A-Z][A-Za-z].+)$', theatre)
+        if th_film_m:
+            film_suffix = th_film_m.group(2).strip()
+            if re.search(r'[a-z]', film_suffix):   # has lowercase → likely a film title
+                clean = re.sub(r'\s*[-–]\s*(2D|3D|OC|IMAX|XD|Combo).*',
+                               '', film_suffix, flags=re.I).strip()
+                if clean:
+                    current_film = clean
+                theatre = th_film_m.group(1).strip()
 
         if not theatre or not re.search(r'\d', theatre):
             continue   # theatre name should contain a screen-count number
@@ -976,7 +990,26 @@ def run_daemon(mode: str = "demo"):
                 print("__JOB_DONE__", flush=True)
 
             except Exception as exc:
-                log(f"[daemon] ERROR: {exc}")
+                err_msg = str(exc)
+                log(f"[daemon] ERROR: {err_msg}")
+                # If the browser was closed externally, relaunch it and retry once
+                if "closed" in err_msg.lower() or "target" in err_msg.lower():
+                    log("[daemon] Browser appears closed — relaunching ...")
+                    try:
+                        browser = _pw.chromium.launch(
+                            headless=_HEADLESS, slow_mo=_SLOW_MO, args=_BROWSER_ARGS,
+                        )
+                        ctx_kwargs2: dict = {"viewport": {"width": 1440, "height": 900}}
+                        if AUTH_FILE.exists():
+                            ctx_kwargs2["storage_state"] = str(AUTH_FILE)
+                        ctx  = browser.new_context(**ctx_kwargs2)
+                        page = ctx.new_page()
+                        if not _HEADLESS:
+                            page.bring_to_front()
+                        _navigate_to_plans(page, ctx)
+                        log("[daemon] Browser relaunched — please re-submit the job")
+                    except Exception as relaunch_exc:
+                        log(f"[daemon] Relaunch failed: {relaunch_exc}")
                 print(f"__JOB_ERROR__ {exc}", flush=True)
 
     except Exception as exc:
