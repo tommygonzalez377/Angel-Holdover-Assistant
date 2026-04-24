@@ -2704,7 +2704,6 @@ if __name__ == '__main__':
     url = f'http://localhost:{PORT}'
     print(f'Flash Gross Launcher -> {url}')
     print('Press Ctrl+C to stop.\n')
-    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
