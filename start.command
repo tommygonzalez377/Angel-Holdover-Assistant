@@ -17,7 +17,9 @@ fi
 # ── Auto-update from GitHub ───────────────────────────────────────────────────
 if [ -d "$PROJ_DIR/.git" ]; then
     echo "Checking for updates..."
-    git -C "$PROJ_DIR" pull --quiet 2>/dev/null && echo "OK  Up to date" || echo "   (Could not reach GitHub — starting anyway)"
+    git -C "$PROJ_DIR" pull origin master --quiet 2>/dev/null \
+        && echo "OK  Up to date" \
+        || echo "   (Could not reach GitHub — starting anyway)"
 fi
 
 # ── Stop any previous server on port 8766 ────────────────────────────────────
