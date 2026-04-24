@@ -1311,21 +1311,31 @@ def _search_plans_for_title(page, title: str):
     default date window (e.g. future or past releases) are visible.
     """
     try:
-        # 1. Find the Production(s) ng-select (placeholder "Select: All" or similar)
-        prod_sel = page.locator(
-            'ng-select[placeholder*="Select"], ng-select[placeholder*="Production"], '
-            'ng-select:has(> .ng-select-container > .ng-value-container '
-            '> .ng-placeholder:has-text("All"))'
-        ).first
-        if prod_sel.count() == 0:
-            # Fallback: first ng-select on the page
-            prod_sel = page.locator("ng-select").first
+        # 1. Find the Production(s) ng-select via JS (same approach as _filter_by_buyer)
+        idx: int = page.evaluate(
+            """
+            (hints) => {
+                const allNg = Array.from(document.querySelectorAll('ng-select'));
+                for (let i = 0; i < allNg.length; i++) {
+                    const ph = allNg[i].querySelector('.ng-placeholder');
+                    const phText = (ph ? ph.textContent : '').trim().toLowerCase();
+                    if (hints.some(h => phText.includes(h))) return i;
+                    const inp = allNg[i].querySelector('input');
+                    const inpPh = ((inp && inp.placeholder) || '').toLowerCase();
+                    if (hints.some(h => inpPh.includes(h))) return i;
+                }
+                return 0;  // fallback: first ng-select
+            }
+            """,
+            ["production", "select"],
+        )
+        prod_sel = page.locator("ng-select").nth(idx)
 
         prod_sel.click()
         page.wait_for_timeout(400)
         search_input = prod_sel.locator('input').first
         if search_input.count() > 0:
-            search_input.fill(title)
+            search_input.type(title, delay=60)  # keystroke events trigger ng-select search
         else:
             page.keyboard.type(title, delay=60)
         page.wait_for_timeout(900)
