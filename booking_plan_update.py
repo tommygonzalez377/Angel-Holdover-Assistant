@@ -504,6 +504,77 @@ def _parse_email_booking(text: str) -> dict[str, list[dict]]:
     return {film: [{"theatre": t, "date": None} for t in theatres]}
 
 
+def _parse_caribbean_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse Caribbean/Puerto Rico booking format (Caribbean Cinemas).
+
+    Structure:
+        APR 30'26 WK 18             (date header)
+            animal farm  animal farm (film names — tab-indented)
+                         spa         (version sub-header)
+            angel        angel
+        El Distrito    1            (theatre + booking cols)
+        Guaynabo       combo
+        Rio Hondo            1
+        Metro                       (blank = not playing)
+        Theater Count  3            (section footer — skip)
+
+    A theatre is booked if ANY column value is "1" or "combo".
+    Blank = not playing.
+    """
+    full_lower = text.lower()
+    if 'combo' not in full_lower and not re.search(r'\bspa\b|\bov\b', full_lower):
+        return {}
+
+    # Extract play date from header (e.g. "APR 30'26 WK 18" → "04/30")
+    _month_map = {'jan':'01','feb':'02','mar':'03','apr':'04','may':'05','jun':'06',
+                  'jul':'07','aug':'08','sep':'09','oct':'10','nov':'11','dec':'12'}
+    play_date = None
+    for line in text.splitlines()[:8]:
+        m = re.search(r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})', line, re.I)
+        if m:
+            play_date = f"{_month_map[m.group(1).lower()]}/{int(m.group(2)):02d}"
+            break
+
+    # Extract film title from tab-indented header rows
+    _skip_words = {'spa', 'ov', 'angel', 'wk', ''}
+    film = 'Unknown'
+    for line in text.splitlines()[:15]:
+        if not line.startswith('\t'):
+            continue
+        parts = [p.strip().lower() for p in line.split('\t') if p.strip()]
+        for p in parts:
+            if p and p not in _skip_words and not re.match(r'^\d|^wk', p) and len(p) > 2:
+                film = p.title()
+                break
+        if film != 'Unknown':
+            break
+
+    # Parse theatre rows — lines that start with a letter (not tab-indented)
+    results: dict[str, list[dict]] = {}
+    _skip_theatre = re.compile(
+        r'^(theater\s*count|theatre\s*count|spa|ov|angel|combo|\d)', re.I
+    )
+    for line in text.splitlines():
+        if not line or line[0] in (' ', '\t'):
+            continue
+        parts = line.split('\t')
+        theatre = parts[0].strip()
+        if not theatre or not re.search(r'[a-zA-Z]', theatre):
+            continue
+        if _skip_theatre.match(theatre):
+            continue
+        values = [p.strip().lower() for p in parts[1:]]
+        if any(v in ('1', 'combo') for v in values):
+            results.setdefault(film, []).append({'theatre': theatre, 'date': play_date})
+
+    if results:
+        for f, rows in results.items():
+            log(f"  [Caribbean format] Film: '{f}', {len(rows)} theatre(s): "
+                f"{[r['theatre'] for r in rows]}")
+    return results
+
+
 def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
     """
     Parse AMC Theatres booking email format.
@@ -652,6 +723,10 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
         date = _parse_action_date(action)   # "MM/DD" or None
         film = film.strip() or preamble_film or "Unknown"
         results.setdefault(film, []).append({"theatre": theatre.strip(), "date": date})
+
+    # Fallback: try Caribbean/Puerto Rico booking format
+    if not results:
+        results = _parse_caribbean_booking(text)
 
     # Fallback: try AMC booking format
     if not results:
