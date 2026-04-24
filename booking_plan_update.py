@@ -1322,8 +1322,7 @@ def _search_plans_for_title(page, title: str):
             prod_sel = page.locator("ng-select").first
 
         prod_sel.click()
-        page.wait_for_timeout(500)
-        # Type directly into the ng-select search input (more reliable than keyboard.type)
+        page.wait_for_timeout(400)
         search_input = prod_sel.locator('input').first
         if search_input.count() > 0:
             search_input.fill(title)
@@ -1331,34 +1330,15 @@ def _search_plans_for_title(page, title: str):
             page.keyboard.type(title, delay=60)
         page.wait_for_timeout(900)
 
-        # Click the first matching option
-        opt = page.locator(
-            f'.ng-option:has-text("{title}"), [role="option"]:has-text("{title}")'
-        ).first
-        if opt.count() == 0:
-            # Try partial match (first word of title)
-            first_word = title.split()[0]
-            opt = page.locator(f'.ng-option:has-text("{first_word}"), [role="option"]:has-text("{first_word}")').first
+        # Click the first visible option (same pattern as _filter_by_buyer)
+        opt = page.locator('.ng-option:visible, [role="option"]:visible').first
         if opt.count() > 0:
-            opt_text = (opt.text_content() or "").strip()
+            opt_text = (opt.inner_text() or "").strip()
             if opt_text.lower() not in ("no items found", ""):
                 opt.click()
                 page.wait_for_timeout(800)
-                # Verify the selection actually stuck in Angular's model
                 sel_label = (prod_sel.locator('.ng-value-label, .ng-value').first.text_content() or '').strip()
-                if sel_label:
-                    log(f"  Production filter set: '{sel_label}'")
-                else:
-                    # Selection didn't stick — try clicking the option again
-                    log(f"  Retrying production filter selection ...")
-                    prod_sel.click()
-                    page.wait_for_timeout(400)
-                    opt2 = page.locator(f'.ng-option:has-text("{title}"), [role="option"]:has-text("{title}")').first
-                    if opt2.count() > 0:
-                        opt2.click()
-                        page.wait_for_timeout(800)
-                    sel_label2 = (prod_sel.locator('.ng-value-label, .ng-value').first.text_content() or '').strip()
-                    log(f"  Production filter set: '{sel_label2}'" if sel_label2 else f"  WARNING: Production filter may not have applied")
+                log(f"  Production filter set: '{sel_label}'" if sel_label else "  WARNING: Production filter may not have applied")
             else:
                 page.keyboard.press("Escape")
                 log(f"  WARNING: Production '{title}' not found in dropdown — searching without filter")
