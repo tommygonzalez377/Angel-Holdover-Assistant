@@ -488,7 +488,7 @@ HTML = r"""<!DOCTYPE html>
 
 <div id="tab-bar">
   <button class="tab-btn active" onclick="switchTab('holdover')">Angel Holdover Assistant</button>
-  <button class="tab-btn"        onclick="switchTab('booking')">Angel Booking Assistant</button>
+  <button class="tab-btn"        onclick="switchTab('booking')">Angel Booking Assistant ✨ New & Improved</button>
   <button class="tab-btn"        onclick="switchTab('mass')">Angel Mass Booking</button>
 </div>
 
