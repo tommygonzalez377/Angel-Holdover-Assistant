@@ -852,7 +852,7 @@ def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str):
         log(f"  Plan default start date: {plan_default_date or 'unknown'}")
         _screenshot(page, f"bp_{_safe(film)}_detail.png")
 
-        log(f"  Filtering by Contact Person: {contact!r} ...")
+        log(f"  Filtering by Venue Group / Contact: {contact!r} ...")
         _filter_by_buyer(page, contact)
         _screenshot(page, f"bp_{_safe(film)}_filtered.png")
 
@@ -1632,10 +1632,10 @@ def _filter_by_buyer(page, contact: str):
             return -1;
         }
         """,
-        ["contact person", "contact"],
+        ["venue group", "contact person", "contact"],
     )
     if idx < 0:
-        log("  WARNING: Contact Person ng-select not found — venues may not be filtered")
+        log("  WARNING: Venue filter ng-select not found — venues may not be filtered")
         return
     ng_sel = page.locator("ng-select").nth(idx)
     try:
@@ -1658,7 +1658,7 @@ def _filter_by_buyer(page, contact: str):
     if opt.count() > 0:
         opt_text = opt.inner_text().strip()
         opt.click()
-        log(f"  Contact Person filter set: '{opt_text}'")
+        log(f"  Venue filter set: '{opt_text}'")
     else:
         log(f"  WARNING: '{contact}' not found in Contact dropdown — pressing Enter")
         page.keyboard.press("Enter")
@@ -2466,7 +2466,7 @@ def run_mass_booking_plan_update(title: str, booking_text: str = ""):
                     log(f"  Plan default start date: {plan_default_date or 'unknown'}")
                     _screenshot(page, f"bp_mass_{_safe(film)}_{_safe(contact)}_detail.png")
 
-                    log(f"  Filtering by Contact Person: {contact!r} ...")
+                    log(f"  Filtering by Venue Group / Contact: {contact!r} ...")
                     _filter_by_buyer(page, contact)
                     _screenshot(page, f"bp_mass_{_safe(film)}_{_safe(contact)}_filtered.png")
 
