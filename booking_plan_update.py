@@ -521,9 +521,11 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
     Returns { film_title: [{"theatre": str, "date": "MM/DD"}, ...] }
     """
     header_sample = '\n'.join(text.splitlines()[:15])
+    _amc_opening_pat = re.compile(r'\b\d+\s+Opening\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4}')
     is_amc = (
         'AMC Film Programmer' in header_sample
         or ('Theatre Name' in header_sample and 'Change Type' in header_sample)
+        or bool(_amc_opening_pat.search(text))
     )
     if not is_amc:
         return {}

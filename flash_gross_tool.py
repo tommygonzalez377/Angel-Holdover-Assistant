@@ -996,7 +996,11 @@ def load_final_locations(csv_path: str) -> list[dict]:
     # 3.5. Try AMC Theatres booking format (before pandas which can't handle variable columns).
     # Use _raw_pre_strip for detection — preamble stripper above removes 'AMC Film Programmer'.
     # Use raw (stripped) for parsing — data rows with Opening anchors are still present.
-    if df is None and 'AMC Film Programmer' in _raw_pre_strip:
+    _amc_opening_pat = re.compile(r'\b\d+\s+Opening\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4}')
+    if df is None and (
+        'AMC Film Programmer' in _raw_pre_strip
+        or _amc_opening_pat.search(_raw_pre_strip)
+    ):
         import re as _re_amc
         _DMA_RE_amc = _re_amc.compile(
             r'\b([A-Z]{3}[A-Z0-9\-&\/]*(?:\s+[A-Z]{3}[A-Z0-9\-&\/]*)*)'
