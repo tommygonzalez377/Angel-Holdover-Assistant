@@ -57,6 +57,8 @@ VENUE_ALIASES: dict[str, str] = {
     "oviedo mall stm 22":            "regal oviedo marketplace 22",
     "regal naples 4dx & imax":       "regal hollywood cinema naples 20",
     "la habra stm 16":               "regal la habra marketplace 16",
+    # ── Andy Anderson (Bay Area Cinemark circuit) ────────────────────────────
+    "san mateo 12":      "Cinemark Century Downtown San Mateo 12",
     # ── Owen Simonds ──────────────────────────────────────────────────────────
     "stars cinema 6":    "Stars Theater 7",
     # ── Diane Johnson (Cinergy circuit old names) ─────────────────────────────
@@ -892,6 +894,81 @@ def parse_booking_csv(path: Path) -> list[dict]:
             log(f"  [diane-j] parsed {len(results)} results")
             return results
         # ── End Diane Johnson circuit grid format ─────────────────────────────
+
+        # ── Andy Anderson "THEATRE/SCR/City/State" grid format ───────────────
+        # Tab-delimited. Preamble = film names. Header: THEATRE | SCR | City | State | [film cols].
+        # Film cols labeled (e.g. "Prints") — one per preamble film.
+        # Actions: Hold, Hold Shows, Hold a show, Final, blank.
+        _aa_raw_hdrs = [c.strip() for c in _first_content_line.split('\t')]
+        _aa_hdrs     = [h.lower() for h in _aa_raw_hdrs]
+        _is_aa = (
+            '\t' in _first_content_line
+            and _aa_hdrs[0] in ('theatre', 'theater')
+            and 'scr' in _aa_hdrs
+            and 'city' in _aa_hdrs
+            and 'state' in _aa_hdrs
+        )
+        if _is_aa:
+            _preamble_aa  = [l.strip() for l in lines[:header_idx] if l.strip()]
+            _state_idx_aa = _aa_hdrs.index('state')
+            _city_idx_aa  = _aa_hdrs.index('city')
+            _film_idxs_aa = list(range(_state_idx_aa + 1, len(_aa_hdrs)))
+            _film_names_aa = (_preamble_aa[:len(_film_idxs_aa)]
+                              if len(_preamble_aa) >= len(_film_idxs_aa)
+                              else _preamble_aa + [''] * (len(_film_idxs_aa) - len(_preamble_aa)))
+            _cpat_aa  = _re_pbc.compile(r'\(([^,)]+),\s*[A-Z]{2}\)\s*$')
+            _state_col_aa = next((i for i, h in enumerate(_aa_hdrs) if h in ('state', 'st')), -1)
+            _cs_lkp_aa = _load_city_state_lookup()
+            log(f"  [aa] preamble={_preamble_aa} film_idxs={_film_idxs_aa} films={_film_names_aa}")
+            for _dl in content.splitlines()[1:]:
+                if not _dl.strip():
+                    continue
+                _cells_aa = [c.strip() for c in _dl.split('\t')]
+                _raw_nm_aa = _cells_aa[0].strip() if _cells_aa else ''
+                if not _raw_nm_aa:
+                    continue
+                _city_aa = (_cells_aa[_city_idx_aa].strip()
+                            if _city_idx_aa < len(_cells_aa) else '')
+                if not _city_aa:
+                    _cm = _cpat_aa.search(_raw_nm_aa)
+                    _city_aa = _cm.group(1).strip() if _cm else ''
+                _st_aa = (_cells_aa[_state_col_aa].strip().lower()[:2]
+                          if _state_col_aa >= 0 and _state_col_aa < len(_cells_aa) else '')
+                _theatre_aa = _cpat_aa.sub('', _raw_nm_aa).strip()
+                # Check VENUE_ALIASES first (before fuzzy), then city+state fuzzy match
+                _alias_key_aa = _theatre_aa.lower().strip()
+                if _alias_key_aa in VENUE_ALIASES:
+                    _venue_aa = VENUE_ALIASES[_alias_key_aa]
+                else:
+                    _city_key_aa = _BOOKING_CITY_CORRECTIONS.get(_city_aa.lower(), _city_aa.lower())
+                    _cands_aa    = _cs_lkp_aa.get((_city_key_aa, _st_aa), [])
+                    _matched_aa  = _fuzzy_venue_match(_theatre_aa, _cands_aa) if _cands_aa else ''
+                    _venue_aa    = _matched_aa or _theatre_aa
+                    if not _matched_aa:
+                        log(f"  [aa] no master match for '{_theatre_aa}' ({_city_aa}, {_st_aa.upper()}) — using raw")
+                for _fi, _ci in enumerate(_film_idxs_aa):
+                    _val = _cells_aa[_ci].strip() if _ci < len(_cells_aa) else ''
+                    _vl  = _val.lower()
+                    _film_aa = _film_names_aa[_fi] if _fi < len(_film_names_aa) else ''
+                    if 'final' in _vl:
+                        _act_aa, _phrase_aa = 'Final', ''
+                    elif _vl.startswith('hold'):
+                        _act_aa = 'Hold'
+                        _mod = _vl[4:].strip().lstrip('(*').strip()
+                        if _mod == 'a show':
+                            _mod = 'shows'
+                        _phrase_aa = '' if _mod in ('', '1', 'clean') else _mod
+                    elif not _vl:
+                        continue
+                    else:
+                        continue
+                    _scr_aa = get_screening_type(_phrase_aa) if _act_aa == 'Hold' else None
+                    results.append({'theatre': _venue_aa, 'city': _city_aa,
+                                    'action': _act_aa, 'film': _film_aa,
+                                    'phrase': _phrase_aa, 'screening_type': _scr_aa})
+            log(f"  [aa] parsed {len(results)} results")
+            return results
+        # ── End Andy Anderson THEATRE/SCR/City/State format ───────────────────
 
         # ── Jennifer Solorzano "THEATRE/SCR" grid format ──────────────────────
         # Tab-delimited. Preamble lines = film names. Header: THEATRE | SCR | [blank...]
