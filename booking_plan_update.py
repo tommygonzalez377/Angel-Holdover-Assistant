@@ -2176,7 +2176,6 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
             const cityColIdx    = headers.findIndex(h => h.includes('city'));
             const stateColIdx   = headers.findIndex(h => h.includes('state') || h.includes('province'));
             const screensColIdx = headers.findIndex(h => h.includes('screen'));
-            const statusColIdx  = headers.findIndex(h => h.includes('status'));
             function rowData(row, i) {
                 const cells = Array.from(row.querySelectorAll('td'));
                 const venue = (venueColIdx >= 0 ? cells[venueColIdx]?.textContent : '').trim().replace(/\\s+/g, ' ');
@@ -2186,23 +2185,15 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
                 const screens = (screensColIdx >= 0 ? cells[screensColIdx]?.textContent : '').trim();
                 return { venue, city, state, screens };
             }
-            // Also check any unmatched row already marked Booked/Agreed in Mica
-            const alreadyAgreed = [];
-            rows.forEach((row, i) => {
-                if (usedIdx.has(i)) return;
-                const cells = Array.from(row.querySelectorAll('td'));
-                const statusText = (statusColIdx >= 0 ? cells[statusColIdx]?.textContent : '').trim().toLowerCase();
-                const isBooked = statusText.includes('book') || statusText.includes('agree') || statusText.includes('confirm');
-                if (!isBooked) return;
-                const rd = rowData(row, i);
-                if (!rd) return;
-                alreadyAgreed.push(rd);
-                if (!dryRun) {
+            // Rows already checked (Agreed) in Mica BEFORE our run, and not matched by booking sheet
+            const alreadyAgreed = rows
+                .map((row, i) => {
+                    if (usedIdx.has(i)) return null;
                     const cb = row.querySelector('input[type="checkbox"]');
-                    if (cb && !cb.checked) { cb.click(); selected++; }
-                }
-                usedIdx.add(i);
-            });
+                    if (!cb || !cb.checked) return null;
+                    return rowData(row, i);
+                })
+                .filter(t => t !== null);
             const unselected = rows
                 .map((row, i) => {
                     if (usedIdx.has(i)) return null;
