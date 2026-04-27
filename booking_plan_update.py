@@ -781,6 +781,64 @@ def _parse_glen_parham_booking(text: str) -> dict[str, list[dict]]:
     return results
 
 
+def _parse_diane_johnson_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse Diane Johnson circuit-grid format:
+      CIRCUIT | THEATRE | CITY | STATE | [Film - M/D] ...
+    Returns opening rows (action contains 'open') as {film: [{"theatre", "date"}]}.
+    Date comes from the column header (' - M/D' suffix), not from the action cell.
+    """
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines:
+        return {}
+    _raw_hdrs = [c.strip() for c in lines[0].split('\t')]
+    _hdrs     = [h.lower() for h in _raw_hdrs]
+    if not ('\t' in lines[0] and 'circuit' in _hdrs and 'theatre' in _hdrs
+            and 'theatre name' not in _hdrs
+            and any(re.search(r'-\s*\d{1,2}/\d{1,2}', h) for h in _hdrs)):
+        return {}
+    _film_cols = [i for i, h in enumerate(_hdrs) if re.search(r'-\s*\d{1,2}/\d{1,2}', h)]
+    _film_names = [re.sub(r'\s*-\s*\d{1,2}/\d{1,2}.*', '', _raw_hdrs[i]).strip()
+                   for i in _film_cols]
+    _film_dates = []
+    for i in _film_cols:
+        m = re.search(r'(\d{1,2}/\d{1,2})', _raw_hdrs[i])
+        _film_dates.append(m.group(1) if m else None)
+    _ci_circuit = _hdrs.index('circuit') if 'circuit' in _hdrs else -1
+    _ci_theatre = _hdrs.index('theatre') if 'theatre' in _hdrs else -1
+    _ci_city    = _hdrs.index('city')    if 'city'    in _hdrs else -1
+    _ci_state   = next((i for i, h in enumerate(_hdrs) if h in ('state', 'st')), -1)
+    _cs_lkp     = _load_gp_city_state_lookup()
+    results: dict[str, list[dict]] = {}
+    for _dl in lines[1:]:
+        _cells = [c.strip() for c in _dl.split('\t')]
+        def _g(i): return _cells[i] if 0 <= i < len(_cells) else ""
+        _circuit = _g(_ci_circuit)
+        _thtr    = _g(_ci_theatre)
+        _city    = _g(_ci_city)
+        _st      = _g(_ci_state).lower()[:2]
+        if not _thtr:
+            continue
+        _city_key = _GP_CITY_CORRECTIONS.get(_city.lower(), _city.lower())
+        _cands    = _cs_lkp.get((_city_key, _st), [])
+        _matched  = _gp_fuzzy_match(_thtr, _cands) if _cands else ''
+        if not _matched and _circuit:
+            _matched = _gp_fuzzy_match(f"{_circuit} {_thtr}", _cands) if _cands else ''
+        _venue = _matched or (f"{_circuit} {_thtr}".strip() if _circuit else _thtr)
+        for _fi, _ci in enumerate(_film_cols):
+            _val = _g(_ci)
+            if 'open' not in _val.lower():
+                continue
+            _film = _film_names[_fi]
+            _date = _film_dates[_fi]
+            results.setdefault(_film, []).append({"theatre": _venue, "date": _date})
+    if results:
+        for film, rows in results.items():
+            log(f"  [diane-j-open] Film: '{film}', {len(rows)} theatre(s): "
+                f"{[r['theatre'] for r in rows]}")
+    return results
+
+
 def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     """
     Parse booking text and return:
@@ -792,6 +850,10 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     if not text or not text.strip():
         return {}
 
+    # ── Diane Johnson circuit-grid format: early detection ───────────────────
+    _dj_result = _parse_diane_johnson_booking(text)
+    if _dj_result:
+        return _dj_result
     # ── Glen Parham / GTC format: early detection before generic parsers ──────
     _gp_result = _parse_glen_parham_booking(text)
     if _gp_result:
