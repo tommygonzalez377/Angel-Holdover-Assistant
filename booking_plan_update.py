@@ -2036,6 +2036,15 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     # Regal/Rich Motzer — abbreviated venue names
     "natomas mktplace stm 16 & rpx": "Natomas Marketplace 16",
     "stockton cty ctr stm 16 & imax":"Stockton City Center 16",
+    # Regal/Christopher Lauderdale — stm-only sig-word venues need city disambiguation
+    "auburn stm 17":                "Auburn Stadium 17",
+    "bridgeport stm 18 & imax":     "Bridgeport Tigard 18",
+    "cascade stm 16 imax & rpx":    "Cascade Vancouver 16",
+    "cinema 99 stm 11":             "Cinema 99 Vancouver",
+    "city center stm 12":           "City Vancouver 12",
+    "movies on tv stm 16":          "Movies Hillsboro 16",
+    "santiam stm 11":               "Santiam Salem 11",
+    "stark street stm 10":          "Stark Gresham 10",
     # Celebration! Cinema (Zach Righetti) — booking names differ from Mica abbreviated names
     "cinema carousel 16":               "Celebration Cinema Carousel",
     "crossroads 15 + imax":             "Celebration Crossroads Imax",
