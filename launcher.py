@@ -102,7 +102,8 @@ _LOGO_FOOTER_IMG = (f'<img id="footer-logo" src="data:image/png;base64,{_LOGO_B6
 
 _job_queues:   dict[str, queue.Queue] = {}
 _job_results:  dict[str, str]         = {}   # job_id → 'success' | 'error: ...'
-_job_unbooked: dict[str, list]        = {}   # job_id → list of {venue, city, state, screens}
+_job_unbooked:        dict[str, list] = {}   # job_id → list of {venue, city, state, screens}
+_job_already_booked:  dict[str, list] = {}   # job_id → Agreed in Mica but not on booking sheet
 _comscore_lock = threading.Lock()             # only one Comscore scrape at a time
 
 # ---------------------------------------------------------------------------
@@ -184,22 +185,30 @@ HTML = r"""<!DOCTYPE html>
   }
   #booking-main-col { flex: 1; min-width: 0; }
 
-  /* ── Unbooked venues panel ───────────────────────────────────────────── */
-  #unbooked-panel {
+  /* ── Side panels (unbooked / already-booked) ─────────────────────────── */
+  .side-panel {
     width: 300px; flex-shrink: 0;
     background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
     border-radius: 14px; padding: 16px; display: none; flex-direction: column; gap: 10px;
     align-self: flex-start; margin-top: 0;
   }
-  #unbooked-panel.visible { display: flex; }
-  #unbooked-title { font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 0.04em; }
-  #unbooked-count { font-size: 11px; color: #aaa; }
-  #unbooked-table-wrap { overflow-y: auto; max-height: 520px; }
-  #unbooked-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  #unbooked-table th { color: #aaa; text-align: left; padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.1); position: sticky; top: 0; background: rgba(20,20,30,0.95); }
-  #unbooked-table td { color: #e0e0e0; padding: 5px 6px; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: top; }
-  #unbooked-table tr:last-child td { border-bottom: none; }
-  #unbooked-table .scr-col { text-align: right; color: #aaa; }
+  .side-panel.visible { display: flex; }
+  .side-panel-title { font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 0.04em; }
+  .side-panel-count { font-size: 11px; color: #aaa; }
+  .side-panel-table-wrap { overflow-y: auto; max-height: 520px; }
+  .side-panel-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .side-panel-table th { color: #aaa; text-align: left; padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.1); position: sticky; top: 0; background: rgba(20,20,30,0.95); }
+  .side-panel-table td { color: #e0e0e0; padding: 5px 6px; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: top; }
+  .side-panel-table tr:last-child td { border-bottom: none; }
+  .side-panel-table .scr-col { text-align: right; color: #aaa; }
+  #already-booked-panel { border-color: rgba(255,200,80,0.3); background: rgba(255,180,0,0.06); }
+  #already-booked-panel .side-panel-title { color: #ffc850; }
+  /* legacy IDs kept for backward compat */
+  #unbooked-panel { }
+  #unbooked-title { }
+  #unbooked-count { }
+  #unbooked-table-wrap { }
+  #unbooked-table { }
 
   #booking-drop-zone {
     background: rgba(255,255,255,0.07); backdrop-filter: blur(12px);
@@ -615,13 +624,24 @@ HTML = r"""<!DOCTYPE html>
       <p class="hint">Updates the title in the Mica sales plan for the specified contact.</p>
     </div>
 
-    <div id="unbooked-panel">
-      <div id="unbooked-title">Not Yet Booked</div>
-      <div id="unbooked-count"></div>
-      <div id="unbooked-table-wrap">
-        <table id="unbooked-table">
+    <div id="unbooked-panel" class="side-panel">
+      <div id="unbooked-title" class="side-panel-title">Not Yet Booked</div>
+      <div id="unbooked-count" class="side-panel-count"></div>
+      <div id="unbooked-table-wrap" class="side-panel-table-wrap">
+        <table id="unbooked-table" class="side-panel-table">
           <thead><tr><th>Theatre</th><th>City</th><th>St</th><th class="scr-col">Scr</th></tr></thead>
           <tbody id="unbooked-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="already-booked-panel" class="side-panel">
+      <div class="side-panel-title">Booked in Mica — Not on Sheet</div>
+      <div id="already-booked-count" class="side-panel-count"></div>
+      <div class="side-panel-table-wrap">
+        <table class="side-panel-table">
+          <thead><tr><th>Theatre</th><th>City</th><th>St</th><th class="scr-col">Scr</th></tr></thead>
+          <tbody id="already-booked-tbody"></tbody>
         </table>
       </div>
     </div>
@@ -1264,24 +1284,23 @@ async function runBookingUpdate() {
       btn.disabled = false;
       btn.textContent = 'Update Sales Plan ▶';
       document.getElementById('booking-reset-btn').style.display = 'block';
-      // Fetch unbooked venues and render panel
+      // Fetch unbooked / already-booked venues and render panels
       fetch('/job-status/' + job_id).then(r => r.json()).then(d => {
-        const list = d.unbooked || [];
-        if (!list.length) return;
-        // Sort by screen count descending (numeric parse, blanks last)
-        list.sort((a, b) => {
-          const sa = parseInt(a.screens) || 0, sb = parseInt(b.screens) || 0;
-          return sb - sa;
-        });
-        const tbody = document.getElementById('unbooked-tbody');
-        tbody.innerHTML = '';
-        list.forEach(v => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td>' + (v.venue||'') + '</td><td>' + (v.city||'') + '</td><td>' + (v.state||'') + '</td><td class="scr-col">' + (v.screens||'—') + '</td>';
-          tbody.appendChild(tr);
-        });
-        document.getElementById('unbooked-count').textContent = list.length + ' venue' + (list.length === 1 ? '' : 's');
-        document.getElementById('unbooked-panel').classList.add('visible');
+        function renderPanel(panelId, countId, tbodyId, list) {
+          if (!list || !list.length) return;
+          list.sort((a, b) => (parseInt(b.screens)||0) - (parseInt(a.screens)||0));
+          const tbody = document.getElementById(tbodyId);
+          tbody.innerHTML = '';
+          list.forEach(v => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td>' + (v.venue||'') + '</td><td>' + (v.city||'') + '</td><td>' + (v.state||'') + '</td><td class="scr-col">' + (v.screens||'—') + '</td>';
+            tbody.appendChild(tr);
+          });
+          document.getElementById(countId).textContent = list.length + ' venue' + (list.length === 1 ? '' : 's');
+          document.getElementById(panelId).classList.add('visible');
+        }
+        renderPanel('unbooked-panel',       'unbooked-count',       'unbooked-tbody',       d.unbooked       || []);
+        renderPanel('already-booked-panel', 'already-booked-count', 'already-booked-tbody', d.already_booked || []);
       }).catch(() => {});
       return;
     }
@@ -1329,9 +1348,10 @@ function resetBookingUI() {
   const btn = document.getElementById('booking-run-btn');
   btn.disabled = false;
   btn.textContent = 'Update Sales Plan ▶';
-  const panel = document.getElementById('unbooked-panel');
-  panel.classList.remove('visible');
+  document.getElementById('unbooked-panel').classList.remove('visible');
   document.getElementById('unbooked-tbody').innerHTML = '';
+  document.getElementById('already-booked-panel').classList.remove('visible');
+  document.getElementById('already-booked-tbody').innerHTML = '';
 }
 
 // ── Mass Booking tab ─────────────────────────────────────────────────────────
@@ -1752,7 +1772,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path.startswith('/job-status/'):
             job_id = self.path[len('/job-status/'):]
             result = _job_results.get(job_id, 'pending')
-            body = json.dumps({'status': result, 'unbooked': _job_unbooked.get(job_id, [])}).encode()
+            body = json.dumps({'status': result, 'unbooked': _job_unbooked.get(job_id, []), 'already_booked': _job_already_booked.get(job_id, [])}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -2643,6 +2663,11 @@ def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str,
                     except Exception:
                         pass
                     # don't forward to SSE — UI fetches via /job-status/
+                elif stripped.startswith('__ALREADY_BOOKED__:'):
+                    try:
+                        _job_already_booked[job_id] = _json.loads(stripped[len('__ALREADY_BOOKED__:'):])
+                    except Exception:
+                        pass
                 else:
                     q.put(stripped)
 

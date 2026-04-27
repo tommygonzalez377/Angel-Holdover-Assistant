@@ -651,7 +651,7 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
             # e.g. "ANGEL STUDIOS INC  Animal Farm" → "Animal Farm"
             film_part = re.sub(r'^(?:[A-Z][A-Z\s]*[A-Z])\s+(?=[A-Z][a-z])', '', film_part).strip()
             if film_part and re.search(r'[a-z]', film_part):
-                clean = re.sub(r'\s*[-–]\s*(2D|3D|OC|IMAX|XD|Combo).*',
+                clean = re.sub(r'\s*[-–]\s*(2D|3D|OC|IMAX|XD|Combo|Dub:|Sub:|Dubbed|Subtitled).*',
                                '', film_part, flags=re.I).strip()
                 if clean:
                     current_film = clean
@@ -667,7 +667,7 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
         if th_film_m:
             film_suffix = th_film_m.group(2).strip()
             if re.search(r'[a-z]', film_suffix):   # has lowercase → likely a film title
-                clean = re.sub(r'\s*[-–]\s*(2D|3D|OC|IMAX|XD|Combo).*',
+                clean = re.sub(r'\s*[-–]\s*(2D|3D|OC|IMAX|XD|Combo|Dub:|Sub:|Dubbed|Subtitled).*',
                                '', film_suffix, flags=re.I).strip()
                 if clean:
                     current_film = clean
@@ -2150,19 +2150,31 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
             const cityColIdx    = headers.findIndex(h => h.includes('city'));
             const stateColIdx   = headers.findIndex(h => h.includes('state') || h.includes('province'));
             const screensColIdx = headers.findIndex(h => h.includes('screen'));
+            function rowData(row, i) {
+                const cells = Array.from(row.querySelectorAll('td'));
+                const venue = (venueColIdx >= 0 ? cells[venueColIdx]?.textContent : '').trim().replace(/\\s+/g, ' ');
+                if (!venue) return null;
+                const city    = (cityColIdx    >= 0 ? cells[cityColIdx]?.textContent    : '').trim();
+                const state   = (stateColIdx   >= 0 ? cells[stateColIdx]?.textContent   : '').trim();
+                const screens = (screensColIdx >= 0 ? cells[screensColIdx]?.textContent : '').trim();
+                return { venue, city, state, screens };
+            }
             const unselected = rows
                 .map((row, i) => {
                     if (usedIdx.has(i)) return null;
-                    const cells = Array.from(row.querySelectorAll('td'));
-                    const venue   = (venueColIdx >= 0 ? cells[venueColIdx]?.textContent : '').trim().replace(/\\s+/g, ' ');
-                    if (!venue) return null;
-                    const city    = (cityColIdx    >= 0 ? cells[cityColIdx]?.textContent    : '').trim();
-                    const state   = (stateColIdx   >= 0 ? cells[stateColIdx]?.textContent   : '').trim();
-                    const screens = (screensColIdx >= 0 ? cells[screensColIdx]?.textContent : '').trim();
-                    return { venue, city, state, screens };
+                    return rowData(row, i);
                 })
                 .filter(t => t !== null);
-            return { selected, matched, missed, venueTexts, unselected };
+            // Rows already checked (Agreed) in Mica BEFORE our run, and not matched by booking sheet
+            const alreadyAgreed = rows
+                .map((row, i) => {
+                    if (usedIdx.has(i)) return null;  // matched by booking sheet — expected
+                    const cb = row.querySelector('input[type="checkbox"]');
+                    if (!cb || !cb.checked) return null;  // not pre-checked
+                    return rowData(row, i);
+                })
+                .filter(t => t !== null);
+            return { selected, matched, missed, venueTexts, unselected, alreadyAgreed };
         }
         """,
         [translated, dry_run],
@@ -2173,8 +2185,9 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
         log(f"    MATCH  '{label}' → '{m['matched']}' (score {m['score']})")
     for m in result.get("missed", []):
         log(f"    MISS   '{m['booking']}' — best score {m['bestScore']} ('{m['bestText']}')")
-    missed_list   = result.get("missed", [])
-    unselected    = result.get("unselected", [])
+    missed_list    = result.get("missed", [])
+    unselected     = result.get("unselected", [])
+    already_agreed = result.get("alreadyAgreed", [])
     total_csv     = len(theatre_names)
     total_matched = result.get("selected", 0)
     log(f"\n  --- Venue Match Summary ---")
@@ -2189,9 +2202,14 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
         log(f"  Mica venues not selected ({len(unselected)}):")
         for v in unselected:
             log(f"    - '{v.get('venue', v) if isinstance(v, dict) else v}'")
-    # Emit machine-readable unbooked list for the UI panel
+    if already_agreed:
+        log(f"  Already Agreed in Mica (not on booking sheet) ({len(already_agreed)}):")
+        for v in already_agreed:
+            log(f"    - '{v.get('venue', v) if isinstance(v, dict) else v}'")
+    # Emit machine-readable lists for the UI panels
     import json as _json_sel
     log(f"__UNBOOKED__:{_json_sel.dumps(unselected)}")
+    log(f"__ALREADY_BOOKED__:{_json_sel.dumps(already_agreed)}")
     return {
         "selected":   total_matched,
         "missed":     [m["booking"] for m in missed_list],
