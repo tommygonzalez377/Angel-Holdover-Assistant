@@ -608,6 +608,10 @@ def _do_seed_aliases():
         ('cinelux - watsonville',              '',              'cinelux green valley watsonville 9',               'CineLux'),
         ('cinelux - scotts valley',            '',              'cinelux scotts valley cinema 10',                  'CineLux'),
         ('cinelux - morgan hill',              '',              'cinelux tennant station morgan hill 11',            'CineLux'),
+        # Taylor Reynolds Cinemark aliases
+        ('henderson 12',                       '',              'cinemark cinedome 12 (henderson)',                  'Cinemark'),
+        ('henderson 12',                       'henderson',     'cinemark cinedome 12 (henderson)',                  'Cinemark'),
+        ('cinemark 12',                        'american fork', 'cinemark american fork 12',                        'Cinemark'),
         # Landmark Kinjal Nagada aliases
         ('landmark 8 west kelowna',            '',              'landmark xtreme west kelowna 8 (163)',              'Landmark Cinemas (Canada)'),
         ('landmark 8 nanaimo',                 '',              'landmark nanaimo (avalon 8) (130)',                 'Landmark Cinemas (Canada)'),
