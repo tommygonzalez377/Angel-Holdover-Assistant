@@ -1884,7 +1884,7 @@ def _filter_by_buyer(page, contact: str):
             return -1;
         }
         """,
-        ["venue group", "contact person", "contact"],
+        ["contact person"],
     )
     if idx < 0:
         log("  WARNING: Venue filter ng-select not found — venues may not be filtered")
