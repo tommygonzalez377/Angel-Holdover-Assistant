@@ -489,7 +489,7 @@ HTML = r"""<!DOCTYPE html>
   <h1>Angel Studios</h1>
   <div id="user-nav" style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;">
     <span id="user-email" style="color:#aaa;"></span>
-    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">4/27 2PM Update</span>
+    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">4/27 3PM Update</span>
     <a href="/aliases" style="color:#aaa;text-decoration:none;font-size:12px;">Venue Aliases</a>
     <a id="profile-link" href="/auth/profile" style="color:#00bcd4;text-decoration:none;display:none;">My Profile</a>
     <a id="logout-link" href="/auth/logout" style="color:#888;text-decoration:none;display:none;">Sign Out</a>
@@ -1022,12 +1022,17 @@ async function handleFile(file) {
   src.onerror = async () => {
     if (_jobDone) return;
     src.close();
-    try {
-      const r = await fetch('/job-status/' + job_id);
-      const d = await r.json();
-      if (d.status === 'success') { _jobDone = true; setDone(); return; }
-      if (d.status && d.status.startsWith('error:')) { _jobDone = true; setError(d.status.replace('error:', '').trim()); return; }
-    } catch(_) {}
+    appendLine('--- Connection dropped — polling for result…');
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      if (_jobDone) return;
+      try {
+        const r = await fetch('/job-status/' + job_id);
+        const d = await r.json();
+        if (d.status === 'success') { _jobDone = true; setDone(); return; }
+        if (d.status && d.status.startsWith('error:')) { _jobDone = true; setError(d.status.replace('error:', '').trim()); return; }
+      } catch(_) {}
+    }
     setError('Connection to launcher lost.');
   };
 }
@@ -1119,12 +1124,17 @@ async function runPaste() {
   src.onerror = async () => {
     if (_jobDone) return;
     src.close();
-    try {
-      const r = await fetch('/job-status/' + job_id);
-      const d = await r.json();
-      if (d.status === 'success') { _jobDone = true; setDone(); return; }
-      if (d.status && d.status.startsWith('error:')) { _jobDone = true; setError(d.status.replace('error:', '').trim()); return; }
-    } catch(_) {}
+    appendLine('--- Connection dropped — polling for result…');
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      if (_jobDone) return;
+      try {
+        const r = await fetch('/job-status/' + job_id);
+        const d = await r.json();
+        if (d.status === 'success') { _jobDone = true; setDone(); return; }
+        if (d.status && d.status.startsWith('error:')) { _jobDone = true; setError(d.status.replace('error:', '').trim()); return; }
+      } catch(_) {}
+    }
     setError('Connection to launcher lost.');
   };
 }
@@ -1181,7 +1191,20 @@ async function runMica() {
     if (line.startsWith('__ERROR__')) { src.close(); resetBtn(); micaAppendLine('ERROR: ' + line.replace('__ERROR__', '').trim(), 'line-err'); return; }
     micaAppendLine(line);
   };
-  src.onerror = () => { src.close(); resetBtn(); micaAppendLine('Connection lost.', 'line-err'); };
+  src.onerror = async () => {
+    src.close();
+    micaAppendLine('--- Connection dropped — polling for result…', 'line-warn');
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      try {
+        const r = await fetch('/job-status/' + job_id);
+        const d = await r.json();
+        if (d.status === 'success') { resetBtn(); micaAppendLine('✓ Mica update complete!', 'line-ok'); return; }
+        if (d.status && d.status.startsWith('error:')) { resetBtn(); micaAppendLine('ERROR: ' + d.status.replace('error:','').trim(), 'line-err'); return; }
+      } catch(_) {}
+    }
+    resetBtn(); micaAppendLine('Connection lost.', 'line-err');
+  };
 }
 
 function micaAppendLine(text, cls) {
