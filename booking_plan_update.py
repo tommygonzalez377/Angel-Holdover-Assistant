@@ -1260,9 +1260,9 @@ def run_daemon(mode: str = "demo"):
             except Exception as exc:
                 err_msg = str(exc)
                 log(f"[daemon] ERROR: {err_msg}")
-                # If the browser was closed externally, relaunch it and retry once
+                # If the browser was closed externally, relaunch it and retry the job once
                 if "closed" in err_msg.lower() or "target" in err_msg.lower():
-                    log("[daemon] Browser appears closed — relaunching ...")
+                    log("[daemon] Browser appears closed — relaunching and retrying ...")
                     try:
                         browser = _pw.chromium.launch(
                             headless=_HEADLESS, slow_mo=_SLOW_MO, args=_BROWSER_ARGS,
@@ -1275,10 +1275,19 @@ def run_daemon(mode: str = "demo"):
                         if not _HEADLESS:
                             page.bring_to_front()
                         _navigate_to_plans(page, ctx)
-                        log("[daemon] Browser relaunched — please re-submit the job")
+                        log("[daemon] Browser relaunched — retrying job ...")
+                        try:
+                            _run_films_in_browser(page, ctx, films_theatres, contact)
+                            log("\n✓ Booking plan update complete!")
+                            print("__JOB_DONE__", flush=True)
+                        except Exception as retry_exc:
+                            log(f"[daemon] Retry failed: {retry_exc}")
+                            print(f"__JOB_ERROR__ {retry_exc}", flush=True)
                     except Exception as relaunch_exc:
                         log(f"[daemon] Relaunch failed: {relaunch_exc}")
-                print(f"__JOB_ERROR__ {exc}", flush=True)
+                        print(f"__JOB_ERROR__ {exc}", flush=True)
+                else:
+                    print(f"__JOB_ERROR__ {exc}", flush=True)
 
     except Exception as exc:
         log(f"[daemon] Fatal error: {exc}")
