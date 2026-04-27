@@ -1259,6 +1259,7 @@ _RENTRAK_DIRECT: dict[str, dict] = {
     "lincoln square cinema bistro 6":     {"rentrak_id": "991855", "venue": "Cinemark Reserve Lincoln Square Dine-In 6"},
     "cinemark totem lake + xd":           {"rentrak_id": "992368", "venue": "Cinemark Village at Totem Lake 8"},
     "century walla walla grand cinema 12":{"rentrak_id": "8836",   "venue": "Cinemark Walla Walla Grand Cinema12"},
+    "garden state plaza 15":             {"rentrak_id": "990434", "venue": "AMC Garden State 15"},
 }
 # City-qualified overrides for ambiguous names (e.g. "Cinemark 16" appears in multiple cities)
 _RENTRAK_DIRECT_CITY: dict[str, dict] = {
