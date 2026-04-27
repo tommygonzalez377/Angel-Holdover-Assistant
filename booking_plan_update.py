@@ -629,13 +629,16 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
         dm = re.search(r'(\d{1,2})/(\d{1,2})', date_raw)
         action_date = f"{int(dm.group(1)):02d}/{int(dm.group(2)):02d}" if dm else None
 
-        # Find DMA in "before": the film title (if any) appears BEFORE the DMA,
-        # the theatre name AFTER it.  If no DMA is present, "before" is just the theatre.
-        dma_m = _DMA_RE.search(before)
+        # Find DMA in "before": use LAST match so distributor (ANGEL STUDIOS INC)
+        # doesn't shadow the real DMA (ALBANY, DALLAS-FORT WORTH, etc.).
+        all_dma_m = list(_DMA_RE.finditer(before))
+        dma_m = all_dma_m[-1] if all_dma_m else None
         if dma_m:
             film_part  = before[:dma_m.start()].strip()
             theatre    = before[dma_m.end():].strip()
-            # If text before DMA has lowercase letters it's a film title (not a 2-letter DMA word)
+            # Strip leading ALL-CAPS distributor prefix from film_part
+            # e.g. "ANGEL STUDIOS INC  Animal Farm" → "Animal Farm"
+            film_part = re.sub(r'^(?:[A-Z][A-Z\s]*[A-Z])\s+(?=[A-Z][a-z])', '', film_part).strip()
             if film_part and re.search(r'[a-z]', film_part):
                 clean = re.sub(r'\s*[-–]\s*(2D|3D|OC|IMAX|XD|Combo).*',
                                '', film_part, flags=re.I).strip()
@@ -2140,7 +2143,7 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
                 .map((row, i) => {
                     if (usedIdx.has(i)) return null;
                     const cells = Array.from(row.querySelectorAll('td'));
-                    const venue   = (venueColIdx >= 0 ? cells[venueColIdx]?.textContent : '').trim().replace(/\s+/g, ' ');
+                    const venue   = (venueColIdx >= 0 ? cells[venueColIdx]?.textContent : '').trim().replace(/\\s+/g, ' ');
                     if (!venue) return null;
                     const city    = (cityColIdx    >= 0 ? cells[cityColIdx]?.textContent    : '').trim();
                     const state   = (stateColIdx   >= 0 ? cells[stateColIdx]?.textContent   : '').trim();

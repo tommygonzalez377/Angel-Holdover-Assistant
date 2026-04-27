@@ -643,7 +643,7 @@ def parse_booking_csv(path: Path) -> list[dict]:
         _is_amc_hdr = any('AMC Film Programmer' in l for l in stripped_lines[:15])
         if _is_amc_hdr:
             _DMA_RE_amc = re.compile(
-                r'\b([A-Z]{3}[A-Z0-9\-&\/]*(?:\s+[A-Z]{3}[A-Z0-9\-&\/]*)*)'
+                r'\b([A-Z]{2,}[A-Z0-9\-&\/]*(?:\s+[A-Z]{2,}[A-Z0-9\-&\/]*)*)'
                 r'(?:\s*\([^)]*\))?(?:,\s*[A-Z]{2})?\s+(?=[A-Z][a-z])'
             )
             _anchor_amc = re.compile(
