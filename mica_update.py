@@ -86,6 +86,29 @@ def get_screening_type(phrase: str) -> str | None:
     return None  # default is Clean — no change needed
 
 
+# ── Exhibitor Ref ID → Venue lookup (Gundrum ID# grid format) ──────────────
+_MASTER_REF_LOOKUP: dict[tuple[str, str], str] = {}
+
+def _load_master_ref_lookup() -> dict[tuple[str, str], str]:
+    global _MASTER_REF_LOOKUP
+    if _MASTER_REF_LOOKUP:
+        return _MASTER_REF_LOOKUP
+    import csv as _csv_ml
+    master_path = Path(__file__).parent / "master_list_cache.csv"
+    if not master_path.exists():
+        log("  [ref-lookup] master_list_cache.csv not found — ID lookup unavailable")
+        return _MASTER_REF_LOOKUP
+    with open(master_path, newline="", encoding="utf-8-sig") as _f:
+        for _row in _csv_ml.DictReader(_f):
+            _ref  = _row.get("Exhibitor's Ref ID", "").strip()
+            _vn   = _row.get("Venue", "").strip()
+            _city = _row.get("City", "").strip().lower()
+            if _ref and _vn and _city:
+                _MASTER_REF_LOOKUP[(_ref, _city)] = _vn
+    log(f"  [ref-lookup] loaded {len(_MASTER_REF_LOOKUP)} entries")
+    return _MASTER_REF_LOOKUP
+
+
 def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
     """Parse booking where each cell is on its own line (email copy-paste format).
     Handles standard Action/Policy format, Cinemark __COLUMN__ format, and bare
@@ -619,6 +642,62 @@ def parse_booking_csv(path: Path) -> list[dict]:
             log(f"  [1b-opl-mica] parsed {len(results)} results")
             return results
         # ── End Cinemark Theater # one-per-line ───────────────────────────────
+
+        # ── Gundrum "ID # grid" format ────────────────────────────────────────
+        # Tab-delimited. Columns: [row#] | ID # | Screens | Theatre (City, ST) | DMA | [film cols...]
+        # Film names are the column headers. Actions: "Hold Clean", "Hold Mats", "Final", "-"
+        _gundrum_hdrs = [h.strip().lower() for h in _first_content_line.split('\t')]
+        _is_gundrum = (
+            '\t' in _first_content_line
+            and 'id #' in _gundrum_hdrs
+            and any(h in ('theatre', 'theater') for h in _gundrum_hdrs)
+            and 'screens' in _gundrum_hdrs
+        )
+        if _is_gundrum:
+            _INFO_G      = {'', 'id #', 'screens', 'theatre', 'theater', 'dma'}
+            _raw_hdrs_g  = [c.strip() for c in _first_content_line.split('\t')]
+            _film_col_idxs_g = [i for i, h in enumerate(_gundrum_hdrs) if h not in _INFO_G]
+            _film_names_g    = [_raw_hdrs_g[i] for i in _film_col_idxs_g]
+            _th_col_g  = next(i for i, h in enumerate(_gundrum_hdrs) if h in ('theatre', 'theater'))
+            _id_col_g  = _gundrum_hdrs.index('id #')
+            _cpat_g    = _re_pbc.compile(r'\(([^,)]+),\s*[A-Z]{2}\)\s*$')
+            _date_g    = _re_pbc.compile(r'\s*\(\d{1,2}/\d{1,2}\)')
+            _ref_lkp_g = _load_master_ref_lookup()
+            log(f"  [gundrum] films={_film_names_g} th_col={_th_col_g} id_col={_id_col_g}")
+            for _dl in content.splitlines()[1:]:
+                if not _dl.strip():
+                    continue
+                _cells = [c.strip() for c in _dl.split('\t')]
+                _raw_id = _cells[_id_col_g].strip() if _id_col_g < len(_cells) else ""
+                _raw_nm = _cells[_th_col_g].strip() if _th_col_g < len(_cells) else ""
+                if not _raw_nm:
+                    continue
+                _raw_nm = _date_g.sub('', _raw_nm)          # strip embedded dates like "(4/18)"
+                _cm = _cpat_g.search(_raw_nm)
+                _city_g    = _cm.group(1).strip() if _cm else ""
+                _theatre_g = _cpat_g.sub('', _raw_nm).strip()
+                _lookup_nm = _ref_lkp_g.get((_raw_id, _city_g.lower()), "")
+                _final_nm  = _lookup_nm or _theatre_g
+                for _fi, _ci in enumerate(_film_col_idxs_g):
+                    _val = _cells[_ci].strip().lower() if _ci < len(_cells) else ""
+                    _film_g = _film_names_g[_fi] if _fi < len(_film_names_g) else ""
+                    if _val == 'final':
+                        _act_g, _phrase_g = 'Final', ''
+                    elif _val.startswith('hold'):
+                        _act_g  = 'Hold'
+                        _mod    = _val[4:].strip()           # e.g. "clean", "mats"
+                        _phrase_g = '' if _mod in ('', 'clean') else _mod
+                    elif _val and _val != '-':
+                        _act_g, _phrase_g = 'Hold', _val
+                    else:
+                        continue                              # "-" or blank = not booked
+                    _st_g = get_screening_type(_phrase_g) if _act_g == 'Hold' else None
+                    results.append({"theatre": _final_nm, "city": _city_g,
+                                    "action": _act_g, "film": _film_g,
+                                    "phrase": _phrase_g, "screening_type": _st_g})
+            log(f"  [gundrum] parsed {len(results)} results")
+            return results
+        # ── End Gundrum ID# grid format ───────────────────────────────────────
 
         # ── "THEATRE" single-header + alternating name/action format ──────────
         # Preamble lines (e.g. "David", "Solo Mio") are film names.
