@@ -2036,6 +2036,15 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     # Regal/Rich Motzer — abbreviated venue names
     "natomas mktplace stm 16 & rpx": "Natomas Marketplace 16",
     "stockton cty ctr stm 16 & imax":"Stockton City Center 16",
+    # Celebration! Cinema (Zach Righetti) — booking names differ from Mica abbreviated names
+    "cinema carousel 16":               "Celebration Cinema Carousel",
+    "crossroads 15 + imax":             "Celebration Crossroads Imax",
+    "rivertown 13 + c premium":         "Celebration Cinema Rivertown",
+    "grand rapids north 17 + imax":     "Celebration Cinema GR North",
+    "grand rapids south 15 + c premium":"Celebration South",
+    "lansing 19 + c premium xl":        "Celebration Lansing Imax",
+    "mt. pleasant 11":                  "Celebration Mt Pleasant",
+    "benton harbor 14 + dbox":          "Celebration Benton Harbor",
 }
 
 
