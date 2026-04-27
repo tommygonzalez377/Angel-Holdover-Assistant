@@ -2029,6 +2029,10 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "southroads 20":            "Southroads Tulsa 20",
     "foothills 15":             "Foothills Tucson 15",
     "surprise 14":              "Surprise Pointe 14",
+    # Regal/Becky Williams — "Stm" suffix stripped by STOP, but these need city disambiguation
+    "champlain centre stm 8":   "Champlain Plattsburgh 8",
+    "e. greenbush 8":           "East Greenbush 8",
+    "aviation mall 9":          "Aviation Mall Queensbury 9",
 }
 
 
@@ -2053,7 +2057,7 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
             const STOP = new Set([
                 'cinemas','cinema','theatre','theater','theatres','theaters',
                 'odeon','vip','and','xscape','entertainment','centre','center',
-                'et','avec','les','des','cineplex','with'
+                'et','avec','les','des','cineplex','with','stm','temp','screens'
             ]);
             // Circuit/format brand words that inflate AMC/Cinemark venue name word counts.
             // Stripped from the DENOMINATOR when computing ratio so that a booking like
