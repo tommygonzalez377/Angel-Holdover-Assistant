@@ -592,7 +592,7 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
     Returns { film_title: [{"theatre": str, "date": "MM/DD"}, ...] }
     """
     header_sample = '\n'.join(text.splitlines()[:15])
-    _amc_opening_pat = re.compile(r'\b\d+\s+Opening\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4}')
+    _amc_opening_pat = re.compile(r'\b\d+\s+(?:Split\s+screen\.\s+)?(?:Opening\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4}|Holdover)\b')
     is_amc = (
         'AMC Film Programmer' in header_sample
         or ('Theatre Name' in header_sample and 'Change Type' in header_sample)
@@ -600,6 +600,12 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
     )
     if not is_amc:
         return {}
+
+    # Extract "Film Week: MM/DD/YYYY" date as fallback for Holdover rows (no explicit date)
+    _fw_m = re.search(r'Film\s+Week[:\s]+(\d{1,2}/\d{1,2}/\d{4})', text)
+    _fw_dm = re.search(r'(\d{1,2})/(\d{1,2})', _fw_m.group(1)) if _fw_m else None
+    film_week_date = (f"{int(_fw_dm.group(1)):02d}/{int(_fw_dm.group(2)):02d}"
+                      if _fw_dm else None)
 
     # DMA pattern: 3+ consecutive ALL-CAPS chars per word (e.g. "ALBANY", "DALLAS-FORT"),
     # optional parenthetical (e.g. "(LAS CRUCES)") and ", ST" suffix,
@@ -619,15 +625,20 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
         if not line:
             continue
 
-        # Anchor: "<digits> Opening - MM/DD/YYYY" (hyphen or em-dash)
-        m = re.search(r'\b\d+\s+Opening\s*[-–]\s*(\d{1,2}/\d{1,2}/\d{4})', line)
+        # Anchor: gross + Opening (with date) OR Holdover (date from film week header)
+        m = re.search(
+            r'\b[\d,]+\s+(?:Split\s+screen\.\s+)?(?:Opening\s*[-–]\s*(\d{1,2}/\d{1,2}/\d{4})|Holdover)\b',
+            line)
         if not m:
             continue
 
         before = line[:m.start()].strip()
-        date_raw = m.group(1)
-        dm = re.search(r'(\d{1,2})/(\d{1,2})', date_raw)
-        action_date = f"{int(dm.group(1)):02d}/{int(dm.group(2)):02d}" if dm else None
+        date_raw = m.group(1)  # None for Holdover rows
+        if date_raw:
+            dm = re.search(r'(\d{1,2})/(\d{1,2})', date_raw)
+            action_date = f"{int(dm.group(1)):02d}/{int(dm.group(2)):02d}" if dm else film_week_date
+        else:
+            action_date = film_week_date  # Holdover: use film week date
 
         # Find DMA in "before": use LAST match so distributor (ANGEL STUDIOS INC)
         # doesn't shadow the real DMA (ALBANY, DALLAS-FORT WORTH, etc.).
