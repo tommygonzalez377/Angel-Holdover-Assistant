@@ -478,9 +478,33 @@ HTML = r"""<!DOCTYPE html>
     transition: opacity 0.2s;
   }
   #footer-logo:hover { opacity: 0.85; }
+  /* Success toast */
+  #success-toast {
+    display: none;
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: #1a1a2e; border: 2px solid #00e676; border-radius: 16px;
+    padding: 40px 60px; text-align: center; z-index: 9999;
+    box-shadow: 0 0 60px rgba(0,230,118,0.3);
+    animation: toastIn 0.3s ease;
+  }
+  #success-toast.show { display: block; }
+  #success-toast .toast-icon { font-size: 48px; margin-bottom: 12px; }
+  #success-toast .toast-title { color: #00e676; font-size: 24px; font-weight: bold; margin-bottom: 8px; }
+  #success-toast .toast-sub { color: #aaa; font-size: 14px; margin-bottom: 24px; }
+  #success-toast button { background: #00e676; color: #000; border: none; border-radius: 8px; padding: 10px 32px; font-size: 15px; font-weight: bold; cursor: pointer; }
+  #toast-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 9998; }
+  #toast-overlay.show { display: block; }
+  @keyframes toastIn { from { opacity:0; transform: translate(-50%,-50%) scale(0.85); } to { opacity:1; transform: translate(-50%,-50%) scale(1); } }
 </style>
 </head>
 <body>
+<div id="toast-overlay"></div>
+<div id="success-toast">
+  <div class="toast-icon">✅</div>
+  <div class="toast-title">Complete!</div>
+  <div class="toast-sub" id="toast-sub">Mica sales plan updated successfully.</div>
+  <button onclick="closeToast()">OK</button>
+</div>
 <video id="bg-video" autoplay muted loop playsinline>
   <source src="/bg-video" type="video/mp4">
 </video>
@@ -489,7 +513,7 @@ HTML = r"""<!DOCTYPE html>
   <h1>Angel Studios</h1>
   <div id="user-nav" style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;">
     <span id="user-email" style="color:#aaa;"></span>
-    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">4/27 3:03PM Update</span>
+    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">4/27 3:22PM Update</span>
     <a href="/aliases" style="color:#aaa;text-decoration:none;font-size:12px;">Venue Aliases</a>
     <a id="profile-link" href="/auth/profile" style="color:#00bcd4;text-decoration:none;display:none;">My Profile</a>
     <a id="logout-link" href="/auth/logout" style="color:#888;text-decoration:none;display:none;">Sign Out</a>
@@ -1083,6 +1107,16 @@ function appendLine(text) {
   progressBox.scrollTop = progressBox.scrollHeight;
 }
 
+function showToast(msg) {
+  if (msg) document.getElementById('toast-sub').textContent = msg;
+  document.getElementById('success-toast').classList.add('show');
+  document.getElementById('toast-overlay').classList.add('show');
+}
+function closeToast() {
+  document.getElementById('success-toast').classList.remove('show');
+  document.getElementById('toast-overlay').classList.remove('show');
+}
+
 async function runPaste() {
   const text = document.getElementById('paste-area').value.trim();
   if (!text) { alert('Please paste some booking data first.'); return; }
@@ -1186,8 +1220,8 @@ async function runMica() {
   src.onmessage = e => {
     const line = e.data;
     if (line === '__PING__')           { return; }
-    if (line === '__DONE__')           { src.close(); resetBtn(); return; }
-    if (line === '__SUCCESS__')        { src.close(); resetBtn(); micaAppendLine('✓ Mica update complete!', 'line-ok'); return; }
+    if (line === '__DONE__')           { src.close(); resetBtn(); showToast('Mica sales plan updated successfully.'); return; }
+    if (line === '__SUCCESS__')        { src.close(); resetBtn(); showToast('Mica sales plan updated successfully.'); micaAppendLine('✓ Mica update complete!', 'line-ok'); return; }
     if (line.startsWith('__ERROR__')) { src.close(); resetBtn(); micaAppendLine('ERROR: ' + line.replace('__ERROR__', '').trim(), 'line-err'); return; }
     micaAppendLine(line);
   };
@@ -1199,7 +1233,7 @@ async function runMica() {
       try {
         const r = await fetch('/job-status/' + job_id);
         const d = await r.json();
-        if (d.status === 'success') { resetBtn(); micaAppendLine('✓ Mica update complete!', 'line-ok'); return; }
+        if (d.status === 'success') { resetBtn(); showToast('Mica sales plan updated successfully.'); micaAppendLine('✓ Mica update complete!', 'line-ok'); return; }
         if (d.status && d.status.startsWith('error:')) { resetBtn(); micaAppendLine('ERROR: ' + d.status.replace('error:','').trim(), 'line-err'); return; }
       } catch(_) {}
     }
