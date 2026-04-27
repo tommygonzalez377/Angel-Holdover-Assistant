@@ -611,7 +611,7 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
     # optional parenthetical (e.g. "(LAS CRUCES)") and ", ST" suffix,
     # followed by a mixed-case theatre name word.
     _DMA_RE = re.compile(
-        r'\b([A-Z]{3}[A-Z0-9\-&\/]*(?:\s+[A-Z]{3}[A-Z0-9\-&\/]*)*)'
+        r'\b([A-Z]{3,}[A-Z0-9\-&\/]*(?:\s+[A-Z]{2,}[A-Z0-9\-&\/]*)*)'
         r'(?:\s*\([^)]*\))?'    # optional parenthetical
         r'(?:,\s*[A-Z]{2})?'   # optional ", ST"
         r'\s+(?=[A-Z][a-z])'   # followed by Mixed-Case word (theatre name)
