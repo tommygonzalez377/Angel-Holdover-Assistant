@@ -672,6 +672,115 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
     return results
 
 
+# ── Glen Parham / GTC "Circuit + Theatre Name" format ───────────────────────
+# Shared state abbreviation map for city+state venue lookup
+_GP_STATE_FULL_TO_ABBREV: dict[str, str] = {
+    'alabama': 'al', 'alaska': 'ak', 'arizona': 'az', 'arkansas': 'ar',
+    'california': 'ca', 'colorado': 'co', 'connecticut': 'ct', 'delaware': 'de',
+    'florida': 'fl', 'georgia': 'ga', 'hawaii': 'hi', 'idaho': 'id',
+    'illinois': 'il', 'indiana': 'in', 'iowa': 'ia', 'kansas': 'ks',
+    'kentucky': 'ky', 'louisiana': 'la', 'maine': 'me', 'maryland': 'md',
+    'massachusetts': 'ma', 'michigan': 'mi', 'minnesota': 'mn', 'mississippi': 'ms',
+    'missouri': 'mo', 'montana': 'mt', 'nebraska': 'ne', 'nevada': 'nv',
+    'new hampshire': 'nh', 'new jersey': 'nj', 'new mexico': 'nm', 'new york': 'ny',
+    'north carolina': 'nc', 'north dakota': 'nd', 'ohio': 'oh', 'oklahoma': 'ok',
+    'oregon': 'or', 'pennsylvania': 'pa', 'rhode island': 'ri', 'south carolina': 'sc',
+    'south dakota': 'sd', 'tennessee': 'tn', 'texas': 'tx', 'utah': 'ut',
+    'vermont': 'vt', 'virginia': 'va', 'washington': 'wa', 'west virginia': 'wv',
+    'wisconsin': 'wi', 'wyoming': 'wy', 'district of columbia': 'dc', 'puerto rico': 'pr',
+}
+_GP_CITY_CORRECTIONS: dict[str, str] = {
+    "fort benning": "fort benning south  (historical)",
+}
+_GP_CITY_STATE_LOOKUP: dict[tuple[str, str], list[str]] = {}
+
+def _load_gp_city_state_lookup() -> dict[tuple[str, str], list[str]]:
+    global _GP_CITY_STATE_LOOKUP
+    if _GP_CITY_STATE_LOOKUP:
+        return _GP_CITY_STATE_LOOKUP
+    master_path = Path(__file__).parent / "master_list_cache.csv"
+    if not master_path.exists():
+        return _GP_CITY_STATE_LOOKUP
+    with open(master_path, newline="", encoding="utf-8-sig") as _f:
+        for _row in csv.DictReader(_f):
+            _vn    = _row.get("Venue", "").strip()
+            _city  = _row.get("City",  "").strip().lower()
+            _state = _GP_STATE_FULL_TO_ABBREV.get(_row.get("State", "").strip().lower(),
+                                                   _row.get("State", "").strip().lower()[:2])
+            if _vn and _city:
+                _GP_CITY_STATE_LOOKUP.setdefault((_city, _state), []).append(_vn)
+    log(f"  [gp-city-lookup] loaded {len(_GP_CITY_STATE_LOOKUP)} city+state keys")
+    return _GP_CITY_STATE_LOOKUP
+
+_GP_STRIP_RE = re.compile(
+    r'\bw/gtx\b|\bwith pdx\b|\bwith gtx\b|\bplf\b|\bstadium\b|\bcinemas?\b'
+    r'|\bcineplex\b|\bw/\w+\b', re.I
+)
+
+def _gp_fuzzy_match(name: str, candidates: list[str], cutoff: float = 0.35) -> str:
+    import difflib as _dl
+    def _norm(s):
+        return re.sub(r'\s+', ' ', _GP_STRIP_RE.sub(' ', s.lower())).strip()
+    _nm = _norm(name)
+    _best, _best_r = '', 0.0
+    for _c in candidates:
+        _r = _dl.SequenceMatcher(None, _nm, _norm(_c)).ratio()
+        if _r > _best_r:
+            _best_r, _best = _r, _c
+    return _best if _best_r >= cutoff else ''
+
+
+def _parse_glen_parham_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse Glen Parham / GTC format:
+      Circuit | Theatre Name | City | ST | Title | DIST | Playwk | Status | WK# | FSS
+    Returns opening rows (Status starts with "New") as {film: [{"theatre", "date"}]}.
+    """
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines:
+        return {}
+    _hdrs = [h.strip().lower() for h in lines[0].split('\t')]
+    if not ('\t' in lines[0] and 'circuit' in _hdrs
+            and 'theatre name' in _hdrs and 'title' in _hdrs and 'status' in _hdrs):
+        return {}
+    _idx = {h: i for i, h in enumerate(_hdrs)}
+    _ci_thtr  = _idx.get('theatre name', -1)
+    _ci_city  = _idx.get('city', -1)
+    _ci_st    = _idx.get('st', -1)
+    _ci_film  = _idx.get('title', -1)
+    _ci_stat  = _idx.get('status', -1)
+    _ci_playwk = _idx.get('playwk', -1)
+    _cs_lkp   = _load_gp_city_state_lookup()
+    results: dict[str, list[dict]] = {}
+    for _dl in lines[1:]:
+        _cells = [c.strip() for c in _dl.split('\t')]
+        def _gc(i): return _cells[i] if 0 <= i < len(_cells) else ""
+        _stat = _gc(_ci_stat).lower()
+        if not _stat.startswith('new'):
+            continue
+        _thtr = _gc(_ci_thtr)
+        _city = _gc(_ci_city)
+        _st   = _gc(_ci_st).lower()
+        _film = _gc(_ci_film)
+        _playwk = _gc(_ci_playwk)  # "MM/DD/YYYY" → extract "MM/DD"
+        if not _thtr or not _film:
+            continue
+        _date_m = re.match(r'(\d{1,2}/\d{1,2})', _playwk)
+        _date = _date_m.group(1) if _date_m else None
+        _city_key = _GP_CITY_CORRECTIONS.get(_city.lower(), _city.lower())
+        _cands = _cs_lkp.get((_city_key, _st), [])
+        _matched = _gp_fuzzy_match(_thtr, _cands) if _cands else ''
+        _venue = _matched or _thtr
+        if not _matched:
+            log(f"  [glen-parham-open] no master match for '{_thtr}' ({_city}, {_st.upper()}) — using raw name")
+        results.setdefault(_film, []).append({"theatre": _venue, "date": _date})
+    if results:
+        for film, rows in results.items():
+            log(f"  [glen-parham-open] Film: '{film}', {len(rows)} theatre(s): "
+                f"{[r['theatre'] for r in rows]}")
+    return results
+
+
 def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     """
     Parse booking text and return:
@@ -682,6 +791,12 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     """
     if not text or not text.strip():
         return {}
+
+    # ── Glen Parham / GTC format: early detection before generic parsers ──────
+    _gp_result = _parse_glen_parham_booking(text)
+    if _gp_result:
+        return _gp_result
+    # ──────────────────────────────────────────────────────────────────────────
 
     lines    = [l for l in text.splitlines() if l.strip()]
     max_tabs  = max((l.count("\t") for l in lines[:5]), default=0)
