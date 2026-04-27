@@ -2030,9 +2030,12 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "foothills 15":             "Foothills Tucson 15",
     "surprise 14":              "Surprise Pointe 14",
     # Regal/Becky Williams — "Stm" suffix stripped by STOP, but these need city disambiguation
-    "champlain centre stm 8":   "Champlain Plattsburgh 8",
-    "e. greenbush 8":           "East Greenbush 8",
-    "aviation mall 9":          "Aviation Mall Queensbury 9",
+    "champlain centre stm 8":        "Champlain Plattsburgh 8",
+    "e. greenbush 8":                "East Greenbush 8",
+    "aviation mall 9":               "Aviation Mall Queensbury 9",
+    # Regal/Rich Motzer — abbreviated venue names
+    "natomas mktplace stm 16 & rpx": "Natomas Marketplace 16",
+    "stockton cty ctr stm 16 & imax":"Stockton City Center 16",
 }
 
 
