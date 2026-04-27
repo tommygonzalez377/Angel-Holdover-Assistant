@@ -110,6 +110,7 @@ PHRASE_TO_SCREENING: list[tuple[str, str]] = [
     ("prime",       "Prime"),
     ("split",       "Alternating"),
     ("alt",         "Alternating"),
+    ("shows",       "Alternating"),
 ]
 
 
