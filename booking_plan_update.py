@@ -436,6 +436,10 @@ def _is_active_action(action: str) -> bool:
         return True
     if "final" in al:
         return True
+    if "confirm" in al:
+        return True
+    if "tentative" in al:
+        return True
     return False             # Cancelled, Hold, Declined, etc.
 
 
