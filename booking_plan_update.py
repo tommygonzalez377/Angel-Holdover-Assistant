@@ -2210,6 +2210,9 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
     import json as _json_sel
     log(f"__UNBOOKED__:{_json_sel.dumps(unselected)}")
     log(f"__ALREADY_BOOKED__:{_json_sel.dumps(already_agreed)}")
+    # Missed = on booking sheet but not found in Mica plan
+    missed_simple = [{'venue': m['booking'], 'bestMatch': m.get('bestText',''), 'score': m.get('bestScore',0)} for m in missed_list]
+    log(f"__MISSED__:{_json_sel.dumps(missed_simple)}")
     return {
         "selected":   total_matched,
         "missed":     [m["booking"] for m in missed_list],

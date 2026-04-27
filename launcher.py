@@ -104,6 +104,7 @@ _job_queues:   dict[str, queue.Queue] = {}
 _job_results:  dict[str, str]         = {}   # job_id → 'success' | 'error: ...'
 _job_unbooked:        dict[str, list] = {}   # job_id → list of {venue, city, state, screens}
 _job_already_booked:  dict[str, list] = {}   # job_id → Agreed in Mica but not on booking sheet
+_job_missed:          dict[str, list] = {}   # job_id → on sheet but not found in Mica
 _comscore_lock = threading.Lock()             # only one Comscore scrape at a time
 
 # ---------------------------------------------------------------------------
@@ -185,30 +186,30 @@ HTML = r"""<!DOCTYPE html>
   }
   #booking-main-col { flex: 1; min-width: 0; }
 
-  /* ── Side panels (unbooked / already-booked) ─────────────────────────── */
-  .side-panel {
-    width: 300px; flex-shrink: 0;
+  /* ── Booking Differences panel ───────────────────────────────────────── */
+  #diff-panel {
+    width: 320px; flex-shrink: 0;
     background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 14px; padding: 16px; display: none; flex-direction: column; gap: 10px;
-    align-self: flex-start; margin-top: 0;
+    border-radius: 14px; padding: 18px 16px; display: none; flex-direction: column; gap: 14px;
+    align-self: flex-start;
   }
-  .side-panel.visible { display: flex; }
-  .side-panel-title { font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 0.04em; }
-  .side-panel-count { font-size: 11px; color: #aaa; }
-  .side-panel-table-wrap { overflow-y: auto; max-height: 520px; }
-  .side-panel-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  .side-panel-table th { color: #aaa; text-align: left; padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.1); position: sticky; top: 0; background: rgba(20,20,30,0.95); }
-  .side-panel-table td { color: #e0e0e0; padding: 5px 6px; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: top; }
-  .side-panel-table tr:last-child td { border-bottom: none; }
-  .side-panel-table .scr-col { text-align: right; color: #aaa; }
-  #already-booked-panel { border-color: rgba(255,200,80,0.3); background: rgba(255,180,0,0.06); }
-  #already-booked-panel .side-panel-title { color: #ffc850; }
-  /* legacy IDs kept for backward compat */
-  #unbooked-panel { }
-  #unbooked-title { }
-  #unbooked-count { }
-  #unbooked-table-wrap { }
-  #unbooked-table { }
+  #diff-panel.visible { display: flex; }
+  #diff-panel-title { font-size: 14px; font-weight: 700; color: #fff; letter-spacing: 0.04em; margin-bottom: 2px; }
+  .diff-section { display: flex; flex-direction: column; gap: 6px; }
+  .diff-section-hdr {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 5px 8px; border-radius: 6px;
+  }
+  .diff-section-hdr.hdr-mica   { background: rgba(255,180,0,0.15); color: #ffc850; }
+  .diff-section-hdr.hdr-sheet  { background: rgba(255,80,80,0.12);  color: #ff8080; }
+  .diff-section-count { font-size: 11px; color: #aaa; padding: 0 2px; }
+  .diff-table-wrap { overflow-y: auto; max-height: 260px; }
+  .diff-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .diff-table th { color: #888; text-align: left; padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.08); position: sticky; top: 0; background: rgba(18,18,28,0.97); }
+  .diff-table td { color: #ddd; padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: top; }
+  .diff-table tr:last-child td { border-bottom: none; }
+  .diff-table .scr-col { text-align: right; color: #888; }
+  .diff-empty { font-size: 11px; color: #555; font-style: italic; padding: 4px 2px; }
 
   #booking-drop-zone {
     background: rgba(255,255,255,0.07); backdrop-filter: blur(12px);
@@ -624,25 +625,31 @@ HTML = r"""<!DOCTYPE html>
       <p class="hint">Updates the title in the Mica sales plan for the specified contact.</p>
     </div>
 
-    <div id="unbooked-panel" class="side-panel">
-      <div id="unbooked-title" class="side-panel-title">Not Yet Booked</div>
-      <div id="unbooked-count" class="side-panel-count"></div>
-      <div id="unbooked-table-wrap" class="side-panel-table-wrap">
-        <table id="unbooked-table" class="side-panel-table">
-          <thead><tr><th>Theatre</th><th>City</th><th>St</th><th class="scr-col">Scr</th></tr></thead>
-          <tbody id="unbooked-tbody"></tbody>
-        </table>
-      </div>
-    </div>
+    <div id="diff-panel">
+      <div id="diff-panel-title">Booking Differences</div>
 
-    <div id="already-booked-panel" class="side-panel">
-      <div class="side-panel-title">Booked in Mica — Not on Sheet</div>
-      <div id="already-booked-count" class="side-panel-count"></div>
-      <div class="side-panel-table-wrap">
-        <table class="side-panel-table">
-          <thead><tr><th>Theatre</th><th>City</th><th>St</th><th class="scr-col">Scr</th></tr></thead>
-          <tbody id="already-booked-tbody"></tbody>
-        </table>
+      <!-- Section 1: Agreed in Mica but not on booking sheet -->
+      <div class="diff-section">
+        <div class="diff-section-hdr hdr-mica">In Mica — Not on Sheet</div>
+        <div id="diff-mica-count" class="diff-section-count"></div>
+        <div class="diff-table-wrap">
+          <table class="diff-table">
+            <thead><tr><th>Theatre</th><th>City</th><th>St</th><th class="scr-col">Scr</th></tr></thead>
+            <tbody id="diff-mica-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Section 2: On booking sheet but not found in Mica -->
+      <div class="diff-section">
+        <div class="diff-section-hdr hdr-sheet">On Sheet — Not in Mica</div>
+        <div id="diff-sheet-count" class="diff-section-count"></div>
+        <div class="diff-table-wrap">
+          <table class="diff-table">
+            <thead><tr><th>Theatre</th><th>Closest Match</th></tr></thead>
+            <tbody id="diff-sheet-tbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </main>
@@ -1284,23 +1291,41 @@ async function runBookingUpdate() {
       btn.disabled = false;
       btn.textContent = 'Update Sales Plan ▶';
       document.getElementById('booking-reset-btn').style.display = 'block';
-      // Fetch unbooked / already-booked venues and render panels
+      // Fetch differences and render unified panel
       fetch('/job-status/' + job_id).then(r => r.json()).then(d => {
-        function renderPanel(panelId, countId, tbodyId, list) {
-          if (!list || !list.length) return;
-          list.sort((a, b) => (parseInt(b.screens)||0) - (parseInt(a.screens)||0));
-          const tbody = document.getElementById(tbodyId);
-          tbody.innerHTML = '';
-          list.forEach(v => {
+        const micaList  = (d.already_booked || []).sort((a,b) => (parseInt(b.screens)||0)-(parseInt(a.screens)||0));
+        const sheetList = d.missed || [];
+        if (!micaList.length && !sheetList.length) return;
+        // Section 1: In Mica, not on sheet
+        const micaTbody = document.getElementById('diff-mica-tbody');
+        micaTbody.innerHTML = '';
+        if (micaList.length) {
+          micaList.forEach(v => {
             const tr = document.createElement('tr');
             tr.innerHTML = '<td>' + (v.venue||'') + '</td><td>' + (v.city||'') + '</td><td>' + (v.state||'') + '</td><td class="scr-col">' + (v.screens||'—') + '</td>';
-            tbody.appendChild(tr);
+            micaTbody.appendChild(tr);
           });
-          document.getElementById(countId).textContent = list.length + ' venue' + (list.length === 1 ? '' : 's');
-          document.getElementById(panelId).classList.add('visible');
+          document.getElementById('diff-mica-count').textContent = micaList.length + ' venue' + (micaList.length===1?'':'s');
+        } else {
+          micaTbody.innerHTML = '<tr><td colspan="4" class="diff-empty">None — all Mica bookings are on the sheet</td></tr>';
+          document.getElementById('diff-mica-count').textContent = '';
         }
-        renderPanel('unbooked-panel',       'unbooked-count',       'unbooked-tbody',       d.unbooked       || []);
-        renderPanel('already-booked-panel', 'already-booked-count', 'already-booked-tbody', d.already_booked || []);
+        // Section 2: On sheet, not in Mica
+        const sheetTbody = document.getElementById('diff-sheet-tbody');
+        sheetTbody.innerHTML = '';
+        if (sheetList.length) {
+          sheetList.forEach(v => {
+            const tr = document.createElement('tr');
+            const closest = v.bestMatch ? '<span style="color:#666">' + v.bestMatch + '</span>' : '<span style="color:#555">—</span>';
+            tr.innerHTML = '<td>' + (v.venue||v) + '</td><td>' + closest + '</td>';
+            sheetTbody.appendChild(tr);
+          });
+          document.getElementById('diff-sheet-count').textContent = sheetList.length + ' venue' + (sheetList.length===1?'':'s');
+        } else {
+          sheetTbody.innerHTML = '<tr><td colspan="2" class="diff-empty">None — all sheet entries matched</td></tr>';
+          document.getElementById('diff-sheet-count').textContent = '';
+        }
+        document.getElementById('diff-panel').classList.add('visible');
       }).catch(() => {});
       return;
     }
@@ -1348,10 +1373,14 @@ function resetBookingUI() {
   const btn = document.getElementById('booking-run-btn');
   btn.disabled = false;
   btn.textContent = 'Update Sales Plan ▶';
-  document.getElementById('unbooked-panel').classList.remove('visible');
-  document.getElementById('unbooked-tbody').innerHTML = '';
-  document.getElementById('already-booked-panel').classList.remove('visible');
-  document.getElementById('already-booked-tbody').innerHTML = '';
+  const diffPanel = document.getElementById('diff-panel');
+  if (diffPanel) {
+    diffPanel.classList.remove('visible');
+    document.getElementById('diff-mica-tbody').innerHTML = '';
+    document.getElementById('diff-sheet-tbody').innerHTML = '';
+    document.getElementById('diff-mica-count').textContent = '';
+    document.getElementById('diff-sheet-count').textContent = '';
+  }
 }
 
 // ── Mass Booking tab ─────────────────────────────────────────────────────────
@@ -1772,7 +1801,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path.startswith('/job-status/'):
             job_id = self.path[len('/job-status/'):]
             result = _job_results.get(job_id, 'pending')
-            body = json.dumps({'status': result, 'unbooked': _job_unbooked.get(job_id, []), 'already_booked': _job_already_booked.get(job_id, [])}).encode()
+            body = json.dumps({'status': result, 'unbooked': _job_unbooked.get(job_id, []), 'already_booked': _job_already_booked.get(job_id, []), 'missed': _job_missed.get(job_id, [])}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -2666,6 +2695,11 @@ def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str,
                 elif stripped.startswith('__ALREADY_BOOKED__:'):
                     try:
                         _job_already_booked[job_id] = _json.loads(stripped[len('__ALREADY_BOOKED__:'):])
+                    except Exception:
+                        pass
+                elif stripped.startswith('__MISSED__:'):
+                    try:
+                        _job_missed[job_id] = _json.loads(stripped[len('__MISSED__:'):])
                     except Exception:
                         pass
                 else:
