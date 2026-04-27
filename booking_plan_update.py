@@ -2016,6 +2016,15 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "mountain grove, mo": "fun city 5 cinemas",
     "mountain grove mo":  "fun city 5 cinemas",
     "mountain grove":     "fun city 5 cinemas",
+    # AMC booking-name → Mica venue name (name differs from what parser extracts)
+    "mt vernon 8":              "Mount Vernon 8",
+    "mesa grand 14":            "Mesa Grande 14",
+    "southern hill 12":         "Southern Hills 12",
+    "arrowhead town center 14": "Arrowhead 14",
+    "tulsa 12":                 "Tulsa Hills 12",
+    "southroads 20":            "Southroads Tulsa 20",
+    "foothills 15":             "Foothills Tucson 15",
+    "surprise 14":              "Surprise Pointe 14",
 }
 
 
@@ -2040,7 +2049,7 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
             const STOP = new Set([
                 'cinemas','cinema','theatre','theater','theatres','theaters',
                 'odeon','vip','and','xscape','entertainment','centre','center',
-                'et','avec','les','des','cineplex'
+                'et','avec','les','des','cineplex','with'
             ]);
             // Circuit/format brand words that inflate AMC/Cinemark venue name word counts.
             // Stripped from the DENOMINATOR when computing ratio so that a booking like
