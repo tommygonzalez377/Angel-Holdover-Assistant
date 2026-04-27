@@ -102,6 +102,7 @@ _LOGO_FOOTER_IMG = (f'<img id="footer-logo" src="data:image/png;base64,{_LOGO_B6
 
 _job_queues:   dict[str, queue.Queue] = {}
 _job_results:  dict[str, str]         = {}   # job_id → 'success' | 'error: ...'
+_job_unbooked: dict[str, list]        = {}   # job_id → list of {venue, city, state, screens}
 _comscore_lock = threading.Lock()             # only one Comscore scrape at a time
 
 # ---------------------------------------------------------------------------
@@ -173,8 +174,8 @@ HTML = r"""<!DOCTYPE html>
 
   /* ── Booking assistant tab ────────────────────────────────────────────── */
   #booking-main {
-    max-width: 920px; margin: 48px auto 52px; padding: 0 24px;
-    display: flex; gap: 32px; align-items: stretch;
+    max-width: 1260px; margin: 48px auto 52px; padding: 0 24px;
+    display: flex; gap: 32px; align-items: flex-start;
   }
   #booking-steps-panel { width: 168px; flex-shrink: 0; position: relative; }
   #booking-step-line {
@@ -182,6 +183,23 @@ HTML = r"""<!DOCTYPE html>
     background: rgba(255,255,255,0.15); pointer-events: none;
   }
   #booking-main-col { flex: 1; min-width: 0; }
+
+  /* ── Unbooked venues panel ───────────────────────────────────────────── */
+  #unbooked-panel {
+    width: 300px; flex-shrink: 0;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 14px; padding: 16px; display: none; flex-direction: column; gap: 10px;
+    align-self: flex-start; margin-top: 0;
+  }
+  #unbooked-panel.visible { display: flex; }
+  #unbooked-title { font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 0.04em; }
+  #unbooked-count { font-size: 11px; color: #aaa; }
+  #unbooked-table-wrap { overflow-y: auto; max-height: 520px; }
+  #unbooked-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  #unbooked-table th { color: #aaa; text-align: left; padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.1); position: sticky; top: 0; background: rgba(20,20,30,0.95); }
+  #unbooked-table td { color: #e0e0e0; padding: 5px 6px; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: top; }
+  #unbooked-table tr:last-child td { border-bottom: none; }
+  #unbooked-table .scr-col { text-align: right; color: #aaa; }
 
   #booking-drop-zone {
     background: rgba(255,255,255,0.07); backdrop-filter: blur(12px);
@@ -595,6 +613,17 @@ HTML = r"""<!DOCTYPE html>
       <div id="booking-progress"></div>
       <button id="booking-reset-btn" onclick="resetBookingUI()">Run Another</button>
       <p class="hint">Updates the title in the Mica sales plan for the specified contact.</p>
+    </div>
+
+    <div id="unbooked-panel">
+      <div id="unbooked-title">Not Yet Booked</div>
+      <div id="unbooked-count"></div>
+      <div id="unbooked-table-wrap">
+        <table id="unbooked-table">
+          <thead><tr><th>Theatre</th><th>City</th><th>St</th><th class="scr-col">Scr</th></tr></thead>
+          <tbody id="unbooked-tbody"></tbody>
+        </table>
+      </div>
     </div>
   </main>
 </div><!-- end #tab-booking -->
@@ -1235,6 +1264,25 @@ async function runBookingUpdate() {
       btn.disabled = false;
       btn.textContent = 'Update Sales Plan ▶';
       document.getElementById('booking-reset-btn').style.display = 'block';
+      // Fetch unbooked venues and render panel
+      fetch('/job-status/' + job_id).then(r => r.json()).then(d => {
+        const list = d.unbooked || [];
+        if (!list.length) return;
+        // Sort by screen count descending (numeric parse, blanks last)
+        list.sort((a, b) => {
+          const sa = parseInt(a.screens) || 0, sb = parseInt(b.screens) || 0;
+          return sb - sa;
+        });
+        const tbody = document.getElementById('unbooked-tbody');
+        tbody.innerHTML = '';
+        list.forEach(v => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = '<td>' + (v.venue||'') + '</td><td>' + (v.city||'') + '</td><td>' + (v.state||'') + '</td><td class="scr-col">' + (v.screens||'—') + '</td>';
+          tbody.appendChild(tr);
+        });
+        document.getElementById('unbooked-count').textContent = list.length + ' venue' + (list.length === 1 ? '' : 's');
+        document.getElementById('unbooked-panel').classList.add('visible');
+      }).catch(() => {});
       return;
     }
     if (line.startsWith('__ERROR__')) {
@@ -1281,6 +1329,9 @@ function resetBookingUI() {
   const btn = document.getElementById('booking-run-btn');
   btn.disabled = false;
   btn.textContent = 'Update Sales Plan ▶';
+  const panel = document.getElementById('unbooked-panel');
+  panel.classList.remove('visible');
+  document.getElementById('unbooked-tbody').innerHTML = '';
 }
 
 // ── Mass Booking tab ─────────────────────────────────────────────────────────
@@ -1701,7 +1752,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path.startswith('/job-status/'):
             job_id = self.path[len('/job-status/'):]
             result = _job_results.get(job_id, 'pending')
-            body = json.dumps({'status': result}).encode()
+            body = json.dumps({'status': result, 'unbooked': _job_unbooked.get(job_id, [])}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -2586,6 +2637,12 @@ def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str,
                     _job_results[job_id] = f'error: {msg}'
                     q.put(f'__ERROR__ {msg}')
                     break
+                elif stripped.startswith('__UNBOOKED__:'):
+                    try:
+                        _job_unbooked[job_id] = _json.loads(stripped[len('__UNBOOKED__:'):])
+                    except Exception:
+                        pass
+                    # don't forward to SSE — UI fetches via /job-status/
                 else:
                     q.put(stripped)
 

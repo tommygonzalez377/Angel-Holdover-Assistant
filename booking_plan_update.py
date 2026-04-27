@@ -2132,9 +2132,21 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
                     missed.push({ booking, bestScore: bestMatched, bestText });
                 }
             }
-            // Mica venues that were not claimed by any CSV name
-            const unselected = venueTexts
-                .map((t, i) => usedIdx.has(i) ? null : t)
+            // Mica venues that were not claimed by any CSV name — capture full row data
+            const cityColIdx    = headers.findIndex(h => h.includes('city'));
+            const stateColIdx   = headers.findIndex(h => h.includes('state') || h.includes('province'));
+            const screensColIdx = headers.findIndex(h => h.includes('screen'));
+            const unselected = rows
+                .map((row, i) => {
+                    if (usedIdx.has(i)) return null;
+                    const cells = Array.from(row.querySelectorAll('td'));
+                    const venue   = (venueColIdx >= 0 ? cells[venueColIdx]?.textContent : '').trim().replace(/\s+/g, ' ');
+                    if (!venue) return null;
+                    const city    = (cityColIdx    >= 0 ? cells[cityColIdx]?.textContent    : '').trim();
+                    const state   = (stateColIdx   >= 0 ? cells[stateColIdx]?.textContent   : '').trim();
+                    const screens = (screensColIdx >= 0 ? cells[screensColIdx]?.textContent : '').trim();
+                    return { venue, city, state, screens };
+                })
                 .filter(t => t !== null);
             return { selected, matched, missed, venueTexts, unselected };
         }
@@ -2162,7 +2174,10 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
     if unselected:
         log(f"  Mica venues not selected ({len(unselected)}):")
         for v in unselected:
-            log(f"    - '{v}'")
+            log(f"    - '{v.get('venue', v) if isinstance(v, dict) else v}'")
+    # Emit machine-readable unbooked list for the UI panel
+    import json as _json_sel
+    log(f"__UNBOOKED__:{_json_sel.dumps(unselected)}")
     return {
         "selected":   total_matched,
         "missed":     [m["booking"] for m in missed_list],
