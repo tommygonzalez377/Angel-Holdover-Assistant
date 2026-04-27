@@ -59,6 +59,9 @@ VENUE_ALIASES: dict[str, str] = {
     "la habra stm 16":               "regal la habra marketplace 16",
     # ── Owen Simonds ──────────────────────────────────────────────────────────
     "stars cinema 6":    "Stars Theater 7",
+    # ── Diane Johnson (Cinergy circuit old names) ─────────────────────────────
+    "driftwood 6":       "Cinergy Granbury 6",
+    "driftwood 8":       "Cinergy Marble Falls 8",
     # ── Mary Ann B. Silk (Golden Ticket / mixed independent circuit) ─────────
     "aberdeen":          "Golden Ticket Cinemas Aberdeen 5",
     "ale house":         "Golden Ticket Cinemas Greensboro Ale House 10",
@@ -808,6 +811,87 @@ def parse_booking_csv(path: Path) -> list[dict]:
             log(f"  [gundrum] parsed {len(results)} results")
             return results
         # ── End Gundrum ID# grid format ───────────────────────────────────────
+
+        # ── Diane Johnson "circuit grid with date headers" format ─────────────
+        # Tab-delimited. Columns: CIRCUIT | THEATRE | CITY | STATE | [Film - M/D] ...
+        # Film names + dates are the column headers. Actions: "Hold Clean",
+        # "Hold Mats", "Hold Shows", "Final", "Opening", blank/skip.
+        # Distinct from Glen Parham: has "theatre" (not "theatre name"), no "status"
+        # column, and film headers contain a date suffix (" - M/D").
+        _dj_raw_hdrs = [c.strip() for c in _first_content_line.split('\t')]
+        _dj_hdrs     = [h.lower() for h in _dj_raw_hdrs]
+        _is_dj = (
+            '\t' in _first_content_line
+            and 'circuit'  in _dj_hdrs
+            and 'theatre'  in _dj_hdrs
+            and 'theatre name' not in _dj_hdrs
+            and any(_re_pbc.search(r'-\s*\d{1,2}/\d{1,2}', h) for h in _dj_hdrs)
+        )
+        if _is_dj:
+            _DJ_INFO = {'circuit', 'theatre', 'city', 'state', 'st'}
+            _dj_film_cols = [
+                i for i, h in enumerate(_dj_hdrs)
+                if _re_pbc.search(r'-\s*\d{1,2}/\d{1,2}', h)
+            ]
+            # Extract film name by stripping " - M/D" suffix from raw header
+            _dj_film_names = [
+                _re_pbc.sub(r'\s*-\s*\d{1,2}/\d{1,2}.*', '', _dj_raw_hdrs[i]).strip()
+                for i in _dj_film_cols
+            ]
+            _ci_dj_circuit = _dj_hdrs.index('circuit') if 'circuit' in _dj_hdrs else -1
+            _ci_dj_theatre = _dj_hdrs.index('theatre') if 'theatre' in _dj_hdrs else -1
+            _ci_dj_city    = _dj_hdrs.index('city')    if 'city'    in _dj_hdrs else -1
+            _ci_dj_state   = next((i for i, h in enumerate(_dj_hdrs) if h in ('state', 'st')), -1)
+            _cs_lkp_dj     = _load_city_state_lookup()
+            log(f"  [diane-j] films={_dj_film_names} film_cols={_dj_film_cols}")
+            for _dl in content.splitlines()[1:]:
+                if not _dl.strip():
+                    continue
+                _cells = [c.strip() for c in _dl.split('\t')]
+                def _dj(i): return _cells[i] if 0 <= i < len(_cells) else ""
+                _circuit_dj = _dj(_ci_dj_circuit)
+                _thtr_dj    = _dj(_ci_dj_theatre)
+                _city_dj    = _dj(_ci_dj_city)
+                _st_dj      = _dj(_ci_dj_state).lower()[:2]
+                if not _thtr_dj:
+                    continue
+                # Venue lookup: try theatre alone, then circuit+theatre
+                _city_key_dj = _BOOKING_CITY_CORRECTIONS.get(_city_dj.lower(), _city_dj.lower())
+                _cands_dj    = _cs_lkp_dj.get((_city_key_dj, _st_dj), [])
+                _matched_dj  = _fuzzy_venue_match(_thtr_dj, _cands_dj) if _cands_dj else ''
+                if not _matched_dj and _circuit_dj:
+                    _combined_dj = f"{_circuit_dj} {_thtr_dj}"
+                    _matched_dj  = _fuzzy_venue_match(_combined_dj, _cands_dj) if _cands_dj else ''
+                if _matched_dj:
+                    _venue_dj = _matched_dj
+                elif _circuit_dj:
+                    # Use circuit+theatre so Mica's scorer has more signal than bare name
+                    _venue_dj = f"{_circuit_dj} {_thtr_dj}"
+                    log(f"  [diane-j] no match for '{_thtr_dj}' ({_city_dj}, {_st_dj.upper()}) — using '{_venue_dj}'")
+                else:
+                    _venue_dj = _thtr_dj
+                    log(f"  [diane-j] no match for '{_thtr_dj}' ({_city_dj}, {_st_dj.upper()}) — using raw name")
+                for _fi, _ci in enumerate(_dj_film_cols):
+                    _val  = _dj(_ci)
+                    _vl   = _val.lower().strip()
+                    _film_dj = _dj_film_names[_fi]
+                    if 'final' in _vl:
+                        _act_dj, _phrase_dj = 'Final', ''
+                    elif _vl.startswith('hold'):
+                        _act_dj  = 'Hold'
+                        _mod_dj  = _vl[4:].strip().lstrip('(*').strip()
+                        _phrase_dj = '' if _mod_dj in ('', 'clean') else _mod_dj
+                    elif 'open' in _vl:
+                        continue  # opening — handled by booking_plan_update
+                    else:
+                        continue  # blank or unrecognised
+                    _st_type_dj = get_screening_type(_phrase_dj) if _act_dj == 'Hold' else None
+                    results.append({"theatre": _venue_dj, "city": _city_dj,
+                                    "action": _act_dj, "film": _film_dj,
+                                    "phrase": _phrase_dj, "screening_type": _st_type_dj})
+            log(f"  [diane-j] parsed {len(results)} results")
+            return results
+        # ── End Diane Johnson circuit grid format ─────────────────────────────
 
         # ── Glen Parham / GTC "Circuit + Theatre Name" format ────────────────
         # Tab-delimited. Columns: Circuit | Theatre Name | City | ST | Title |
