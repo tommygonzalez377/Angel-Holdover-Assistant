@@ -461,6 +461,7 @@ HTML = r"""<!DOCTYPE html>
   <h1>Angel Studios</h1>
   <div id="user-nav" style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;">
     <span id="user-email" style="color:#aaa;"></span>
+    <span style="color:#aaa;font-size:12px;">Friday 4/24 Update</span>
     <a href="/aliases" style="color:#aaa;text-decoration:none;font-size:12px;">Venue Aliases</a>
     <a id="profile-link" href="/auth/profile" style="color:#00bcd4;text-decoration:none;display:none;">My Profile</a>
     <a id="logout-link" href="/auth/logout" style="color:#888;text-decoration:none;display:none;">Sign Out</a>
@@ -488,7 +489,7 @@ HTML = r"""<!DOCTYPE html>
 
 <div id="tab-bar">
   <button class="tab-btn active" onclick="switchTab('holdover')">Angel Holdover Assistant</button>
-  <button class="tab-btn"        onclick="switchTab('booking')">Angel Booking Assistant — Friday 4/24 Update</button>
+  <button class="tab-btn"        onclick="switchTab('booking')">Angel Booking Assistant</button>
   <button class="tab-btn"        onclick="switchTab('mass')">Angel Mass Booking</button>
 </div>
 
