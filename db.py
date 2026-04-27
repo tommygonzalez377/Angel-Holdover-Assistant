@@ -608,6 +608,15 @@ def _do_seed_aliases():
         ('cinelux - watsonville',              '',              'cinelux green valley watsonville 9',               'CineLux'),
         ('cinelux - scotts valley',            '',              'cinelux scotts valley cinema 10',                  'CineLux'),
         ('cinelux - morgan hill',              '',              'cinelux tennant station morgan hill 11',            'CineLux'),
+        # Brad Bills city/state aliases
+        ('new haven, mo',                      '',              'walt theatre new haven 1',                         ''),
+        ('new haven',                          'new haven',     'walt theatre new haven 1',                         ''),
+        ('lamar, mo',                          '',              'plaza lamar 1',                                    ''),
+        ('lamar',                              'lamar',         'plaza lamar 1',                                    ''),
+        ('borger, tx',                         '',              'morley borger 5',                                  ''),
+        ('borger',                             'borger',        'morley borger 5',                                  ''),
+        ('mountain grove, mo',                 '',              'fun city 5 cinemas',                               ''),
+        ('mountain grove',                     'mountain grove','fun city 5 cinemas',                               ''),
     ]
 
     for booking_name, city, master_name, chain in SEED_ALIASES:
