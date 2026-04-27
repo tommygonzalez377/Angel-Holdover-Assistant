@@ -635,6 +635,67 @@ def parse_booking_csv(path: Path) -> list[dict]:
         )
         log(f"  [debug] header_idx={header_idx} max_tabs={_max_tabs} max_commas={_max_commas} comscore={_is_comscore_hdr}")
 
+        # ── AMC Holdover Report format ────────────────────────────────────────
+        # PDF copy-paste from AMC booking system. Each data line contains an
+        # anchor: "<gross> [Split screen. ]?<Final|Holdover|Opening>".
+        # Film title tracks across lines (blank merged cell in PDF → same film).
+        # "Split screen. Holdover" → Hold/Alternating; "Holdover" → Hold/Clean.
+        _is_amc_hdr = any('AMC Film Programmer' in l for l in stripped_lines[:15])
+        if _is_amc_hdr:
+            _DMA_RE_amc = re.compile(
+                r'\b([A-Z]{3}[A-Z0-9\-&\/]*(?:\s+[A-Z]{3}[A-Z0-9\-&\/]*)*)'
+                r'(?:\s*\([^)]*\))?(?:,\s*[A-Z]{2})?\s+(?=[A-Z][a-z])'
+            )
+            _anchor_amc = re.compile(
+                r'\b[\d,]+\s+((?:Split\s+[Ss]creen\.\s+)?(?:Final|Holdover))\b'
+            )
+            _cur_film_amc = ''
+            _full_text_amc = ''.join(lines)
+            for _ln in _full_text_amc.splitlines():
+                _ln = _ln.strip()
+                if not _ln:
+                    continue
+                _am = _anchor_amc.search(_ln)
+                if not _am:
+                    continue
+                _action_str = _am.group(1)
+                _is_split   = 'split' in _action_str.lower()
+                if 'final' in _action_str.lower():
+                    _act_amc, _phrase_amc = 'Final', ''
+                else:
+                    _act_amc   = 'Hold'
+                    _phrase_amc = 'shows' if _is_split else ''
+                _before = _ln[:_am.start()].strip()
+                # Use the LAST DMA match — first may be the distributor name (ALL-CAPS)
+                _all_dma_m = list(_DMA_RE_amc.finditer(_before))
+                _dma_m     = _all_dma_m[-1] if _all_dma_m else None
+                if _dma_m:
+                    _film_part = _before[:_dma_m.start()].strip()
+                    _th_amc    = _before[_dma_m.end():].strip()
+                    # Extract film title: rightmost mixed-case word(s) in film_part
+                    _fp_clean = re.sub(r'\b[A-Z]{2,}\b[\s]*', ' ', _film_part).strip()
+                    _fp_clean = re.sub(r'\s+', ' ', _fp_clean).strip()
+                    if _fp_clean:
+                        _cur_film_amc = _fp_clean
+                else:
+                    _th_amc = _before
+                # Split off embedded film title after screen-count number
+                _tf_m = re.match(r'^(.+?\b\d+)\s+([A-Z][A-Za-z].+)$', _th_amc)
+                if _tf_m and re.search(r'[a-z]', _tf_m.group(2)):
+                    _clean = re.sub(r'\s*[-–]\s*(2D|3D|OC|IMAX|XD|Combo).*', '', _tf_m.group(2), flags=re.I).strip()
+                    if _clean:
+                        _cur_film_amc = _clean
+                    _th_amc = _tf_m.group(1).strip()
+                if not _th_amc or not re.search(r'\d', _th_amc):
+                    continue
+                _st_amc = get_screening_type(_phrase_amc) if _act_amc == 'Hold' else None
+                results.append({'theatre': _th_amc, 'city': '', 'action': _act_amc,
+                                'film': _cur_film_amc, 'phrase': _phrase_amc,
+                                'screening_type': _st_amc})
+            log(f"  [amc-holdover] parsed {len(results)} results")
+            return results
+        # ── End AMC Holdover Report format ────────────────────────────────────
+
         # ── Cinemark "Theater # / Name (City, State)" TSV format ─────────────
         # Header row starts with "Theater #\t...".  Preamble lines before the
         # header (e.g. "David", "Solo Mio") are the film/production names.
