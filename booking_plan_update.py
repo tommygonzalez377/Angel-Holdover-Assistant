@@ -1077,7 +1077,7 @@ def _navigate_to_plans(page, ctx):
         sys.exit(1)
 
 
-def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str):
+def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: str = "demo"):
     """Execute booking plan updates for all films using an existing page/ctx."""
     for film, entries in films_theatres.items():
         theatre_names = [e["theatre"] for e in entries]
@@ -1098,7 +1098,7 @@ def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str):
 
         log(f"Looking for plan: '{film}' ...")
         _search_plans_for_title(page, film)
-        if not _find_and_click_plan(page, film):
+        if not _find_and_click_plan(page, film, mode=mode):
             log(f"  ERROR: Plan not found for '{film}'")
             log(f"  Tip: Verify the title matches exactly in Mica → Sales → Plans")
             _screenshot(page, f"bp_{_safe(film)}_not_found.png")
@@ -1257,7 +1257,7 @@ def run_daemon(mode: str = "demo"):
                     except PlaywrightTimeout:
                         pass
 
-                _run_films_in_browser(page, ctx, films_theatres, contact)
+                _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode)
                 log("\n✓ Booking plan update complete!")
                 print("__JOB_DONE__", flush=True)
 
@@ -1281,7 +1281,7 @@ def run_daemon(mode: str = "demo"):
                         _navigate_to_plans(page, ctx)
                         log("[daemon] Browser relaunched — retrying job ...")
                         try:
-                            _run_films_in_browser(page, ctx, films_theatres, contact)
+                            _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode)
                             log("\n✓ Booking plan update complete!")
                             print("__JOB_DONE__", flush=True)
                         except Exception as retry_exc:
@@ -1369,7 +1369,7 @@ def run_booking_plan_update(title: str, contact: str, booking_text: str = ""):
 
     try:
         _navigate_to_plans(page, ctx)
-        _run_films_in_browser(page, ctx, films_theatres, contact)
+        _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode)
         log("\n✓ Booking plan update complete!")
 
         # Keep browser open for review (local mode only)
@@ -1703,31 +1703,34 @@ def _search_plans_for_title(page, title: str):
         log(f"  WARNING: Plans filter setup failed ({e}) — will search current table")
 
 
-def _find_and_click_plan(page, title: str) -> bool:
+def _find_and_click_plan(page, title: str, mode: str = "demo") -> bool:
     """Find the best matching plan row for a title.
     - Searches ALL cells in each row (not just first).
-    - If multiple plans exist for the title, prefer the one with 'US, CA, PR' description.
+    - Production: prefer plans with 'US, CA, PR' description.
+    - Demo: prefer plans with 'Demo' description.
     - If only one plan exists, use it regardless of description.
     """
     title_lower = title.lower().strip()
     result: dict = page.evaluate(
         """
-        (titleLower) => {
+        ([titleLower, isDemo]) => {
             const rows = Array.from(document.querySelectorAll('table tbody tr'));
             const sample = rows.slice(0, 5).map(r =>
                 r.textContent.trim().replace(/\\s+/g, ' ').substring(0, 80)
             );
 
             // Score each matching row — higher = better
-            // +10  description contains "us" AND "can" (US/CAN ONLY, US/CAN/PR, etc.)
+            // Demo mode:  +15 description contains "demo"
+            // Prod mode:  +10 description contains "us" AND "can/ca", +5 "us, ca", +2 "pr"
             // -20  description is "Mystery Movie" (hidden/blind title — never the right plan)
             // -10  description contains "test"
-            //  0   anything else (first match)
-            const PREFER = [
+            const PREFER = isDemo ? [
+                d => d.includes('demo')                           ? 15 : 0,
+            ] : [
                 // US/CAN ONLY, US/CAN/PR, US, CA, PR — all territory indicators
                 d => (d.includes('us') && (d.includes('can') || d.includes('ca'))) ? 10 : 0,
-                d => d.includes('pr')                         ?   2 : 0,
-                d => d.includes('us, ca') || d.includes('us,ca') ? 5 : 0,
+                d => d.includes('pr')                             ?   2 : 0,
+                d => d.includes('us, ca') || d.includes('us,ca') ?   5 : 0,
             ];
             const AVOID = [
                 d => d.includes('mystery movie')              ? -20 : 0,
@@ -1762,7 +1765,7 @@ def _find_and_click_plan(page, title: str) -> bool:
             return { idx: chosen, sample, chosenDesc };
         }
         """,
-        title_lower,
+        [title_lower, mode == "demo"],
     )
     log(f"  Plans table sample rows: {result.get('sample', [])}")
     log(f"  Selected plan row: {result.get('chosenDesc', '(none)')}")
@@ -2626,7 +2629,7 @@ def run_participation_update(title: str, booking_text: str = "", circuit: str = 
 
             log(f"Looking for plan: '{title}' ...")
             _search_plans_for_title(page, title)
-            if not _find_and_click_plan(page, title):
+            if not _find_and_click_plan(page, title, mode=args.mode):
                 log(f"ERROR: Plan not found for '{title}'")
                 log("Tip: Verify the title matches exactly in Mica → Sales → Plans")
                 sys.exit(1)
@@ -2793,7 +2796,7 @@ def run_mass_booking_plan_update(title: str, booking_text: str = ""):
 
                     log(f"  Looking for plan: '{film}' ...")
                     _search_plans_for_title(page, film)
-                    if not _find_and_click_plan(page, film):
+                    if not _find_and_click_plan(page, film, mode=args.mode):
                         log(f"  ERROR: Plan not found for '{film}' — skipping")
                         continue
 
