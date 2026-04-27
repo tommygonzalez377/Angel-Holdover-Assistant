@@ -604,6 +604,10 @@ def _do_seed_aliases():
         # Reno Parklane
         ('reno parklane 16',                   'reno',          'cinemark century park lane 16 (reno)',             'Cinemark'),
         ('reno parklane 16',                   '',              'cinemark century park lane 16 (reno)',             'Cinemark'),
+        # CineLux city-only aliases
+        ('cinelux - watsonville',              '',              'cinelux green valley watsonville 9',               'CineLux'),
+        ('cinelux - scotts valley',            '',              'cinelux scotts valley cinema 10',                  'CineLux'),
+        ('cinelux - morgan hill',              '',              'cinelux tennant station morgan hill 11',            'CineLux'),
     ]
 
     for booking_name, city, master_name, chain in SEED_ALIASES:
