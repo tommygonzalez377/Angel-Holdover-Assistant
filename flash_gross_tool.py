@@ -60,7 +60,7 @@ COMSCORE_PASS  = os.getenv("COMSCORE_PASSWORD", "")
 # Parallel scraping: number of simultaneous browser tabs.
 # Sequential (1 worker) on server — keeps the main session active and avoids
 # Comscore's 2-minute idle timeout that kills copied-session parallel browsers.
-MAX_SCRAPE_WORKERS = 2 if _SERVER_MODE else 5
+MAX_SCRAPE_WORKERS = 3 if _SERVER_MODE else 5
 _LOGIN_LOCK = threading.Lock()   # prevents simultaneous re-login across worker tabs
 
 ANTHROPIC_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
