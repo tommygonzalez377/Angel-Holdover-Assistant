@@ -2719,8 +2719,8 @@ def main():
     theatres = parse_booking_csv(csv_path)
 
     if not theatres:
-        log("ERROR: No Hold or Final bookings found in CSV")
-        sys.exit(1)
+        log("INFO: No Hold or Final bookings found in this booking — nothing to update in Mica.")
+        sys.exit(0)
 
     log(f"Found {len(theatres)} Hold/Final booking(s):")
     for t in theatres:

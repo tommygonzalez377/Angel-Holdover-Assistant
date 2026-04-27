@@ -1997,7 +1997,8 @@ def main():
         locations = load_final_locations(str(input_path))
 
     if not locations:
-        sys.exit("ERROR: No FINAL locations found — nothing to scrape.")
+        print("INFO: No Final locations found in booking — nothing to scrape from Comscore.")
+        sys.exit(0)
 
     headless = not args.no_headless
 
