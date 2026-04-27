@@ -608,6 +608,9 @@ def _do_seed_aliases():
         ('cinelux - watsonville',              '',              'cinelux green valley watsonville 9',               'CineLux'),
         ('cinelux - scotts valley',            '',              'cinelux scotts valley cinema 10',                  'CineLux'),
         ('cinelux - morgan hill',              '',              'cinelux tennant station morgan hill 11',            'CineLux'),
+        # Landmark Kinjal Nagada aliases
+        ('landmark 8 west kelowna',            '',              'landmark xtreme west kelowna 8 (163)',              'Landmark Cinemas (Canada)'),
+        ('landmark 8 nanaimo',                 '',              'landmark nanaimo (avalon 8) (130)',                 'Landmark Cinemas (Canada)'),
         # Brad Bills city/state aliases
         ('new haven, mo',                      '',              'walt theatre new haven 1',                         ''),
         ('new haven',                          'new haven',     'walt theatre new haven 1',                         ''),
