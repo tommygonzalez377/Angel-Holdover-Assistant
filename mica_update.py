@@ -893,6 +893,61 @@ def parse_booking_csv(path: Path) -> list[dict]:
             return results
         # ── End Diane Johnson circuit grid format ─────────────────────────────
 
+        # ── Jennifer Solorzano "THEATRE/SCR" grid format ──────────────────────
+        # Tab-delimited. Preamble lines = film names. Header: THEATRE | SCR | [blank...]
+        # Film columns have blank headers; actions in cells.
+        # Actions: "Hold Shows", "Hold 1", "Hold Thru Prime", "Final [date]", blank.
+        _jen_raw_hdrs = [c.strip() for c in _first_content_line.split('\t')]
+        _jen_hdrs     = [h.lower() for h in _jen_raw_hdrs]
+        _is_jen = (
+            '\t' in _first_content_line
+            and _jen_hdrs[0] in ('theatre', 'theater')
+            and 'scr' in _jen_hdrs
+        )
+        if _is_jen:
+            _preamble_jen = [l.strip() for l in lines[:header_idx] if l.strip()]
+            # Film columns = blank-header columns after position of 'scr'
+            _scr_idx_jen  = _jen_hdrs.index('scr')
+            _film_idxs_jen = [i for i in range(_scr_idx_jen + 1, len(_jen_hdrs))
+                               if not _jen_hdrs[i]]
+            _film_names_jen = (_preamble_jen[:len(_film_idxs_jen)]
+                               if len(_preamble_jen) >= len(_film_idxs_jen)
+                               else _preamble_jen + [''] * (len(_film_idxs_jen) - len(_preamble_jen)))
+            _cpat_jen = _re_pbc.compile(r'\(([^,)]+),\s*[A-Z]{2}\)\s*$')
+            _date_jen = _re_pbc.compile(r'\s*(thu|fri|sat|sun|mon|tue|wed)?\s*\d{1,2}/\d{1,2}(/\d{2,4})?', _re_pbc.I)
+            log(f"  [jen] preamble={_preamble_jen} film_idxs={_film_idxs_jen} films={_film_names_jen}")
+            for _dl in content.splitlines()[1:]:
+                if not _dl.strip():
+                    continue
+                _cells = [c.strip() for c in _dl.split('\t')]
+                _raw_nm = _cells[0].strip() if _cells else ""
+                if not _raw_nm:
+                    continue
+                _cm = _cpat_jen.search(_raw_nm)
+                _city_jen   = _cm.group(1).strip() if _cm else ""
+                _theatre_jen = _cpat_jen.sub('', _raw_nm).strip()
+                for _fi, _ci in enumerate(_film_idxs_jen):
+                    _val = _cells[_ci].strip() if _ci < len(_cells) else ""
+                    _vl  = _val.lower()
+                    _film_jen = _film_names_jen[_fi] if _fi < len(_film_names_jen) else ""
+                    if 'final' in _vl:
+                        _act_jen, _phrase_jen = 'Final', ''
+                    elif _vl.startswith('hold'):
+                        _act_jen = 'Hold'
+                        _mod = _vl[4:].strip().lstrip('(*').strip()
+                        _phrase_jen = '' if _mod in ('', '1', 'clean') else _mod
+                    elif not _vl:
+                        continue
+                    else:
+                        continue
+                    _st_jen = get_screening_type(_phrase_jen) if _act_jen == 'Hold' else None
+                    results.append({"theatre": _theatre_jen, "city": _city_jen,
+                                    "action": _act_jen, "film": _film_jen,
+                                    "phrase": _phrase_jen, "screening_type": _st_jen})
+            log(f"  [jen] parsed {len(results)} results")
+            return results
+        # ── End Jennifer Solorzano THEATRE/SCR grid format ────────────────────
+
         # ── Glen Parham / GTC "Circuit + Theatre Name" format ────────────────
         # Tab-delimited. Columns: Circuit | Theatre Name | City | ST | Title |
         #   DIST | Playwk | Status | WK# | FSS
