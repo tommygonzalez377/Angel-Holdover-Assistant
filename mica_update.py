@@ -57,6 +57,8 @@ VENUE_ALIASES: dict[str, str] = {
     "oviedo mall stm 22":            "regal oviedo marketplace 22",
     "regal naples 4dx & imax":       "regal hollywood cinema naples 20",
     "la habra stm 16":               "regal la habra marketplace 16",
+    # ── Owen Simonds ──────────────────────────────────────────────────────────
+    "stars cinema 6":    "Stars Theater 7",
     # ── Mary Ann B. Silk (Golden Ticket / mixed independent circuit) ─────────
     "aberdeen":          "Golden Ticket Cinemas Aberdeen 5",
     "ale house":         "Golden Ticket Cinemas Greensboro Ale House 10",
