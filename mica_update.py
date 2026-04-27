@@ -176,6 +176,7 @@ _STATE_FULL_TO_ABBREV: dict[str, str] = {
 # City name corrections for venues whose master-list city differs from booking city
 _BOOKING_CITY_CORRECTIONS: dict[str, str] = {
     "fort benning": "fort benning south  (historical)",
+    "st. augustine": "saint augustine",
 }
 
 def _load_city_state_lookup() -> dict[tuple[str, str], list[str]]:
