@@ -10,6 +10,7 @@ Usage:
 import argparse
 import csv
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -70,6 +71,7 @@ PHRASE_TO_SCREENING: list[tuple[str, str]] = [
     ("mat",         "Single Matinee"),
     ("prime",       "Prime"),
     ("split",       "Alternating"),
+    ("alt",         "Alternating"),
 ]
 
 
@@ -107,6 +109,72 @@ def _load_master_ref_lookup() -> dict[tuple[str, str], str]:
                 _MASTER_REF_LOOKUP[(_ref, _city)] = _vn
     log(f"  [ref-lookup] loaded {len(_MASTER_REF_LOOKUP)} entries")
     return _MASTER_REF_LOOKUP
+
+
+# ── City+State → [venue names] lookup (Glen Parham / GTC format) ────────────
+_MASTER_CITY_STATE_LOOKUP: dict[tuple[str, str], list[str]] = {}
+
+# US state full name → 2-letter abbreviation (lowercase)
+_STATE_FULL_TO_ABBREV: dict[str, str] = {
+    'alabama': 'al', 'alaska': 'ak', 'arizona': 'az', 'arkansas': 'ar',
+    'california': 'ca', 'colorado': 'co', 'connecticut': 'ct', 'delaware': 'de',
+    'florida': 'fl', 'georgia': 'ga', 'hawaii': 'hi', 'idaho': 'id',
+    'illinois': 'il', 'indiana': 'in', 'iowa': 'ia', 'kansas': 'ks',
+    'kentucky': 'ky', 'louisiana': 'la', 'maine': 'me', 'maryland': 'md',
+    'massachusetts': 'ma', 'michigan': 'mi', 'minnesota': 'mn', 'mississippi': 'ms',
+    'missouri': 'mo', 'montana': 'mt', 'nebraska': 'ne', 'nevada': 'nv',
+    'new hampshire': 'nh', 'new jersey': 'nj', 'new mexico': 'nm', 'new york': 'ny',
+    'north carolina': 'nc', 'north dakota': 'nd', 'ohio': 'oh', 'oklahoma': 'ok',
+    'oregon': 'or', 'pennsylvania': 'pa', 'rhode island': 'ri', 'south carolina': 'sc',
+    'south dakota': 'sd', 'tennessee': 'tn', 'texas': 'tx', 'utah': 'ut',
+    'vermont': 'vt', 'virginia': 'va', 'washington': 'wa', 'west virginia': 'wv',
+    'wisconsin': 'wi', 'wyoming': 'wy', 'district of columbia': 'dc',
+    'puerto rico': 'pr',
+}
+
+# City name corrections for venues whose master-list city differs from booking city
+_BOOKING_CITY_CORRECTIONS: dict[str, str] = {
+    "fort benning": "fort benning south  (historical)",
+}
+
+def _load_city_state_lookup() -> dict[tuple[str, str], list[str]]:
+    global _MASTER_CITY_STATE_LOOKUP
+    if _MASTER_CITY_STATE_LOOKUP:
+        return _MASTER_CITY_STATE_LOOKUP
+    import csv as _csv_cs
+    master_path = Path(__file__).parent / "master_list_cache.csv"
+    if not master_path.exists():
+        return _MASTER_CITY_STATE_LOOKUP
+    with open(master_path, newline="", encoding="utf-8-sig") as _f:
+        for _row in _csv_cs.DictReader(_f):
+            _vn        = _row.get("Venue", "").strip()
+            _city      = _row.get("City",  "").strip().lower()
+            _state_raw = _row.get("State", "").strip().lower()
+            # Normalise full state name → 2-letter abbreviation
+            _state = _STATE_FULL_TO_ABBREV.get(_state_raw, _state_raw[:2])
+            if _vn and _city:
+                _MASTER_CITY_STATE_LOOKUP.setdefault((_city, _state), []).append(_vn)
+    log(f"  [city-state-lookup] loaded {len(_MASTER_CITY_STATE_LOOKUP)} city+state keys")
+    return _MASTER_CITY_STATE_LOOKUP
+
+
+def _fuzzy_venue_match(name: str, candidates: list[str], cutoff: float = 0.35) -> str:
+    """Return best fuzzy match for name from candidates, or '' if none good enough."""
+    import difflib as _dl
+    # Normalise: lowercase, strip format suffixes, collapse spaces
+    _strip_re = re.compile(
+        r'\bw/gtx\b|\bwith pdx\b|\bwith gtx\b|\bplf\b|\bstadium\b|\bcinemas?\b'
+        r'|\bcineplex\b|\bcinema\b|\bw/\w+\b|\s+', re.I
+    )
+    def _norm(s):
+        return _strip_re.sub(' ', s.lower()).strip()
+    _nm = _norm(name)
+    _best, _best_r = '', 0.0
+    for _c in candidates:
+        _r = _dl.SequenceMatcher(None, _nm, _norm(_c)).ratio()
+        if _r > _best_r:
+            _best_r, _best = _r, _c
+    return _best if _best_r >= cutoff else ''
 
 
 def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
@@ -698,6 +766,65 @@ def parse_booking_csv(path: Path) -> list[dict]:
             log(f"  [gundrum] parsed {len(results)} results")
             return results
         # ── End Gundrum ID# grid format ───────────────────────────────────────
+
+        # ── Glen Parham / GTC "Circuit + Theatre Name" format ────────────────
+        # Tab-delimited. Columns: Circuit | Theatre Name | City | ST | Title |
+        #   DIST | Playwk | Status | WK# | FSS
+        # One film per row. Status: "Hold [* qualifier]", "Final", "New..." (skip).
+        _gp_hdrs = [h.strip().lower() for h in _first_content_line.split('\t')]
+        _is_gp = (
+            '\t' in _first_content_line
+            and 'circuit' in _gp_hdrs
+            and 'theatre name' in _gp_hdrs
+            and 'status' in _gp_hdrs
+            and 'title' in _gp_hdrs
+        )
+        if _is_gp:
+            _idx = {h: i for i, h in enumerate(_gp_hdrs)}
+            _ci_thtr = _idx.get('theatre name', -1)
+            _ci_city = _idx.get('city', -1)
+            _ci_st   = _idx.get('st',   -1)
+            _ci_film = _idx.get('title', -1)
+            _ci_stat = _idx.get('status', -1)
+            _cs_lkp  = _load_city_state_lookup()
+            log(f"  [glen-parham] headers={_gp_hdrs}")
+            for _dl in content.splitlines()[1:]:
+                if not _dl.strip():
+                    continue
+                _cells = [c.strip() for c in _dl.split('\t')]
+                def _gc(i): return _cells[i].strip() if 0 <= i < len(_cells) else ""
+                _thtr_raw = _gc(_ci_thtr)
+                _city_raw = _gc(_ci_city)
+                _st_raw   = _gc(_ci_st).lower()[:2]
+                _film_gp  = _gc(_ci_film)
+                _stat_raw = _gc(_ci_stat)
+                if not _thtr_raw or not _stat_raw:
+                    continue
+                _sl = _stat_raw.lower()
+                if _sl.startswith('new') or _sl == '-' or not _sl:
+                    continue  # opening / unbooked — not a holdover
+                if _sl.startswith('final'):
+                    _act_gp, _phrase_gp = 'Final', ''
+                elif _sl.startswith('hold'):
+                    _act_gp = 'Hold'
+                    # qualifier after "hold" (strip leading * chars and spaces)
+                    _qual = _re_pbc.sub(r'^[\s*]+', '', _sl[4:]).strip()
+                    _phrase_gp = '' if _qual in ('', 'schedule') else _qual
+                else:
+                    continue
+                _city_key = _BOOKING_CITY_CORRECTIONS.get(_city_raw.lower(), _city_raw.lower())
+                _cands    = _cs_lkp.get((_city_key, _st_raw), [])
+                _matched  = _fuzzy_venue_match(_thtr_raw, _cands) if _cands else ''
+                _final_gp = _matched or _thtr_raw
+                if not _matched:
+                    log(f"  [glen-parham] no master match for '{_thtr_raw}' ({_city_raw}, {_st_raw.upper()}) — using raw name")
+                _st_gp = get_screening_type(_phrase_gp) if _act_gp == 'Hold' else None
+                results.append({"theatre": _final_gp, "city": _city_raw,
+                                 "action": _act_gp, "film": _film_gp,
+                                 "phrase": _phrase_gp, "screening_type": _st_gp})
+            log(f"  [glen-parham] parsed {len(results)} results")
+            return results
+        # ── End Glen Parham / GTC format ──────────────────────────────────────
 
         # ── "THEATRE" single-header + alternating name/action format ──────────
         # Preamble lines (e.g. "David", "Solo Mio") are film names.
