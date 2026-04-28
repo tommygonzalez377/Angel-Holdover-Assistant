@@ -513,7 +513,7 @@ HTML = r"""<!DOCTYPE html>
   <h1>Angel Studios</h1>
   <div id="user-nav" style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;">
     <span id="user-email" style="color:#aaa;"></span>
-    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">4/27 3:22PM Update</span>
+    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">4/28 9:30AM Update</span>
     <a href="/aliases" style="color:#aaa;text-decoration:none;font-size:12px;">Venue Aliases</a>
     <a id="profile-link" href="/auth/profile" style="color:#00bcd4;text-decoration:none;display:none;">My Profile</a>
     <a id="logout-link" href="/auth/logout" style="color:#888;text-decoration:none;display:none;">Sign Out</a>
@@ -1335,15 +1335,16 @@ async function runBookingUpdate() {
     return;
   }
 
+  let _bpJobDone = false;
   const src = new EventSource('/booking-plan-stream/' + job_id);
   src.onmessage = e => {
     const line = e.data;
     if (line === '__PING__') { return; }
     if (line === '__DONE__') {
-      src.close(); return;
+      _bpJobDone = true; src.close(); return;
     }
     if (line === '__SUCCESS__') {
-      src.close();
+      _bpJobDone = true; src.close();
       bookingAppendLine('✓ Booking plan update complete!', 'line-ok');
       btn.disabled = false;
       btn.textContent = 'Update Sales Plan ▶';
@@ -1387,7 +1388,7 @@ async function runBookingUpdate() {
       return;
     }
     if (line.startsWith('__ERROR__')) {
-      src.close();
+      _bpJobDone = true; src.close();
       bookingAppendLine('ERROR: ' + line.replace('__ERROR__', '').trim(), 'line-err');
       btn.disabled = false;
       btn.textContent = 'Update Sales Plan ▶';
@@ -1396,11 +1397,34 @@ async function runBookingUpdate() {
     }
     bookingAppendLine(line);
   };
-  src.onerror = () => {
+  src.onerror = async () => {
+    if (_bpJobDone) return;
     src.close();
+    bookingAppendLine('--- Connection dropped — polling for result…', 'line-warn');
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      if (_bpJobDone) return;
+      try {
+        const r = await fetch('/job-status/' + job_id);
+        const d = await r.json();
+        if (d.status === 'success') {
+          _bpJobDone = true;
+          bookingAppendLine('✓ Booking plan update complete!', 'line-ok');
+          btn.disabled = false; btn.textContent = 'Update Sales Plan ▶';
+          document.getElementById('booking-reset-btn').style.display = 'block';
+          return;
+        }
+        if (d.status && d.status.startsWith('error:')) {
+          _bpJobDone = true;
+          bookingAppendLine('ERROR: ' + d.status.replace('error:','').trim(), 'line-err');
+          btn.disabled = false; btn.textContent = 'Update Sales Plan ▶';
+          document.getElementById('booking-reset-btn').style.display = 'block';
+          return;
+        }
+      } catch(_) {}
+    }
     bookingAppendLine('Connection lost.', 'line-err');
-    btn.disabled = false;
-    btn.textContent = 'Update Sales Plan ▶';
+    btn.disabled = false; btn.textContent = 'Update Sales Plan ▶';
   };
 }
 
@@ -1520,13 +1544,14 @@ async function runMassBookingUpdate() {
     return;
   }
 
+  let _massJobDone = false;
   const src = new EventSource('/booking-plan-stream/' + job_id);
   src.onmessage = e => {
     const line = e.data;
     if (line === '__PING__') { return; }
-    if (line === '__DONE__') { src.close(); return; }
+    if (line === '__DONE__') { _massJobDone = true; src.close(); return; }
     if (line === '__SUCCESS__') {
-      src.close();
+      _massJobDone = true; src.close();
       const isDry = document.getElementById('mass-dry-run').checked;
       massAppendLine(isDry ? '✓ Dry run complete — no changes made.' : '✓ Mass booking update complete!', 'line-ok');
       document.getElementById('mass-reset-btn').style.display = 'block';
@@ -1534,7 +1559,7 @@ async function runMassBookingUpdate() {
       return;
     }
     if (line.startsWith('__ERROR__')) {
-      src.close();
+      _massJobDone = true; src.close();
       massAppendLine('ERROR: ' + line.replace('__ERROR__','').trim(), 'line-err');
       document.getElementById('mass-reset-btn').style.display = 'block';
       btn.disabled = false; btn.textContent = 'Run Mass Booking ▶';
@@ -1542,7 +1567,35 @@ async function runMassBookingUpdate() {
     }
     massAppendLine(line);
   };
-  src.onerror = () => { src.close(); massAppendLine('Connection lost.', 'line-err'); };
+  src.onerror = async () => {
+    if (_massJobDone) return;
+    src.close();
+    massAppendLine('--- Connection dropped — polling for result…', 'line-warn');
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      if (_massJobDone) return;
+      try {
+        const r = await fetch('/job-status/' + job_id);
+        const d = await r.json();
+        if (d.status === 'success') {
+          _massJobDone = true;
+          massAppendLine('✓ Mass booking update complete!', 'line-ok');
+          document.getElementById('mass-reset-btn').style.display = 'block';
+          btn.disabled = false; btn.textContent = 'Run Mass Booking ▶';
+          return;
+        }
+        if (d.status && d.status.startsWith('error:')) {
+          _massJobDone = true;
+          massAppendLine('ERROR: ' + d.status.replace('error:','').trim(), 'line-err');
+          document.getElementById('mass-reset-btn').style.display = 'block';
+          btn.disabled = false; btn.textContent = 'Run Mass Booking ▶';
+          return;
+        }
+      } catch(_) {}
+    }
+    massAppendLine('Connection lost.', 'line-err');
+    btn.disabled = false; btn.textContent = 'Run Mass Booking ▶';
+  };
 }
 
 function massAppendLine(text, cls) {
@@ -1859,6 +1912,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
             job_id = self.path[len('/job-status/'):]
             result = _job_results.get(job_id, 'pending')
             body = json.dumps({'status': result, 'unbooked': _job_unbooked.get(job_id, []), 'already_booked': _job_already_booked.get(job_id, []), 'missed': _job_missed.get(job_id, [])}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif self.path == '/admin/bp-pool-size':
+            # POST {"size": 1} or {"size": 2} — lets admin scale daemon pool on demand
+            length = int(self.headers.get('Content-Length', 0))
+            raw    = self.rfile.read(length)
+            try:
+                payload = json.loads(raw)
+                new_size = int(payload.get('size', 1))
+            except Exception:
+                self.send_response(400); self.end_headers(); return
+            new_size = max(1, min(2, new_size))
+            global _BP_POOL_SIZE
+            with _bp_pool_lock:
+                old_size = _BP_POOL_SIZE
+                if new_size > old_size:
+                    for _si in range(old_size, new_size):
+                        _bp_slots.put(_si)
+                elif new_size < old_size:
+                    # drain the extra slot (if idle)
+                    for _si in range(new_size, old_size):
+                        try:
+                            _bp_slots.get_nowait()
+                        except queue.Empty:
+                            pass
+                _BP_POOL_SIZE = new_size
+            body = json.dumps({'pool_size': _BP_POOL_SIZE}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -2655,15 +2739,18 @@ def _run_mica(booking_path: Path, contact: str, job_id: str, mode: str = "demo",
 # Booking plan daemon — persistent browser reused across jobs
 # ---------------------------------------------------------------------------
 
-_bp_daemon_proc  = None   # persistent subprocess
-_bp_daemon_env   = None   # env snapshot (to detect credential changes)
-_bp_daemon_mode  = None   # mode used to start daemon
-_bp_daemon_lock  = threading.Lock()
+_BP_POOL_SIZE    = 1      # 1 normally; bump to 2 via /admin/bp-pool-size
+_bp_procs:  list = [None, None]              # proc per slot (max 2)
+_bp_envs:   list = [None, None]              # env snapshot per slot
+_bp_modes:  list = [None, None]              # mode per slot
+_bp_slots:  queue.Queue = queue.Queue()      # available slot indices
+_bp_pool_lock = threading.Lock()             # guards pool-size changes
+for _i in range(_BP_POOL_SIZE):
+    _bp_slots.put(_i)
 
 
-def _start_bp_daemon(mode: str, user_creds: dict):
-    """Start the booking plan daemon subprocess and wait for __READY__."""
-    global _bp_daemon_proc, _bp_daemon_env, _bp_daemon_mode
+def _start_bp_daemon(slot: int, mode: str, user_creds: dict):
+    """Start a booking plan daemon in the given slot and wait for __READY__."""
     env = _build_env(user_creds)
     proc = subprocess.Popen(
         [sys.executable, '-u', str(BASE_DIR / 'booking_plan_update.py'), '--daemon', '--mode', mode],
@@ -2676,37 +2763,33 @@ def _start_bp_daemon(mode: str, user_creds: dict):
         env=env,
         cwd=str(BASE_DIR),
     )
-    # Stream startup output until __READY__
     startup_lines = []
     for line in proc.stdout:
         stripped = line.rstrip()
         if stripped == '__READY__':
             break
         startup_lines.append(stripped)
-    _bp_daemon_proc = proc
-    _bp_daemon_env  = env
-    _bp_daemon_mode = mode
+    _bp_procs[slot] = proc
+    _bp_envs[slot]  = env
+    _bp_modes[slot] = mode
     return startup_lines
 
 
-def _ensure_bp_daemon(mode: str, user_creds: dict):
-    """Return True if daemon is running (start it if needed). Caller holds _bp_daemon_lock."""
-    global _bp_daemon_proc
+def _ensure_bp_daemon(slot: int, mode: str, user_creds: dict):
+    """Ensure daemon in slot is running with correct env+mode. Caller owns the slot."""
     env = _build_env(user_creds)
-    # Check if already running with same env + mode
-    if (_bp_daemon_proc is not None
-            and _bp_daemon_proc.poll() is None
-            and _bp_daemon_mode == mode
-            and _bp_daemon_env == env):
+    if (_bp_procs[slot] is not None
+            and _bp_procs[slot].poll() is None
+            and _bp_modes[slot] == mode
+            and _bp_envs[slot] == env):
         return True
-    # Kill stale daemon if any
-    if _bp_daemon_proc is not None and _bp_daemon_proc.poll() is None:
+    if _bp_procs[slot] is not None and _bp_procs[slot].poll() is None:
         try:
-            _bp_daemon_proc.stdin.write('__QUIT__\n')
-            _bp_daemon_proc.stdin.flush()
+            _bp_procs[slot].stdin.write('__QUIT__\n')
+            _bp_procs[slot].stdin.flush()
         except Exception:
             pass
-    _start_bp_daemon(mode, user_creds)
+    _start_bp_daemon(slot, mode, user_creds)
     return True
 
 
@@ -2722,17 +2805,18 @@ def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str,
         if booking_path and Path(booking_path).exists():
             booking_text = Path(booking_path).read_text(encoding='utf-8-sig', errors='replace')
 
-        with _bp_daemon_lock:
-            _ensure_bp_daemon(mode, user_creds)
+        slot = _bp_slots.get()   # blocks until a daemon slot is free
+        try:
+            _ensure_bp_daemon(slot, mode, user_creds)
             job_payload = _json.dumps({
                 'title': title,
                 'contact': contact,
                 'booking_text': booking_text,
             })
-            _bp_daemon_proc.stdin.write(job_payload + '\n')
-            _bp_daemon_proc.stdin.flush()
+            _bp_procs[slot].stdin.write(job_payload + '\n')
+            _bp_procs[slot].stdin.flush()
 
-            for line in _bp_daemon_proc.stdout:
+            for line in _bp_procs[slot].stdout:
                 stripped = line.rstrip()
                 if stripped == '__JOB_DONE__':
                     _job_results[job_id] = 'success'
@@ -2761,6 +2845,9 @@ def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str,
                         pass
                 else:
                     q.put(stripped)
+
+        finally:
+            _bp_slots.put(slot)   # return slot to pool
 
     except Exception as exc:
         _job_results[job_id] = f'error: {exc}'
