@@ -423,11 +423,67 @@ def _preamble_film_title(text: str) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Screening type phrase → Mica label (mirrors mica_update.py PHRASE_TO_SCREENING)
+# ---------------------------------------------------------------------------
+_BP_SCREENING_PHRASES: list[tuple[str, str]] = [
+    ("hold/shows",  "Alternating"),
+    ("mats+ee",     "Alternating"),
+    ("lm+ee",       "Alternating"),
+    ("em+le",       "Alternating"),
+    ("em+ee",       "Alternating"),
+    ("em + ee",     "Alternating"),
+    ("1 mat",       "Single Matinee"),
+    ("mats",        "Multiple Matinees"),
+    ("lm",          "Multiple Matinees"),
+    ("mat",         "Single Matinee"),
+    ("prime",       "Prime"),
+    ("split",       "Alternating"),
+    ("alt",         "Alternating"),
+    ("shows",       "Alternating"),
+]
+
+_CLEAN_PHRASES = {"clean", "hold", "final", "open", "confirm", "tentative", "cancel", "declined"}
+
+_FRENCH_TITLES: dict[str, str] = {
+    "la ferme des animaux": "Animal Farm",
+}
+
+_CINEPLEX_ABBREVS: dict[str, str] = {
+    "cpx":  "Cineplex",
+    "sbnk": "Scotiabank",
+    "glx":  "Galaxy",
+    "sc":   "SilverCity",
+}
+
+
+def _bp_screening_label(phrase: str) -> str:
+    """Return Mica screening type label for a booking phrase, or '' for Clean/default."""
+    pl = (phrase or "").lower().strip().replace(" ", "")
+    if not pl or any(k in pl for k in ("clean", "hold", "final", "open", "confirm")):
+        return ""
+    for key, label in _BP_SCREENING_PHRASES:
+        if key.replace(" ", "") in pl:
+            return label
+    return ""
+
+
+def _is_screening_phrase(action: str) -> bool:
+    """Return True if the action column contains a screening type (not open/hold/cancel)."""
+    al = action.strip().lower()
+    if not al:
+        return False
+    if any(k in al for k in ("cancel", "declin", "hold", "open", "final", "confirm", "tentative")):
+        return False
+    return bool(_bp_screening_label(al) or al == "clean")
+
+
 def _is_active_action(action: str) -> bool:
     """
     Return True if the booking row should be treated as active/open.
-    Accepts: blank (Cinemark format), "Open ...", "Final" (Cinemark confirmed).
-    Rejects: Cancelled, Hold, Declined, etc.
+    Accepts: blank (Cinemark format), "Open ...", "Final" (Cinemark confirmed),
+             or any known screening type phrase (e.g. "Clean", "MATS+EE").
+    Rejects: Cancelled, Declined, etc.
     """
     al = action.strip().lower()
     if not al:
@@ -440,7 +496,9 @@ def _is_active_action(action: str) -> bool:
         return True
     if "tentative" in al:
         return True
-    return False             # Cancelled, Hold, Declined, etc.
+    if _is_screening_phrase(al):
+        return True          # screening type phrase = active booking
+    return False             # Cancelled, Declined, etc.
 
 
 def _parse_email_booking(text: str) -> dict[str, list[dict]]:
@@ -857,6 +915,84 @@ def _parse_diane_johnson_booking(text: str) -> dict[str, list[dict]]:
     return results
 
 
+_UNIT_NUM_RE = re.compile(r'^\d+\s*[-–]\s*', re.UNICODE)
+
+
+def _expand_cineplex_abbrev(name: str) -> str:
+    """Expand CPX/SBNK/GLX/SC prefix to full brand name."""
+    for abbrev, full in _CINEPLEX_ABBREVS.items():
+        if name.lower().startswith(abbrev + " ") or name.lower().startswith(abbrev + "\t"):
+            return full + name[len(abbrev):]
+    return name
+
+
+def _parse_cineplex_policy_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse Cineplex-style 3-col booking: Theatre# - ABBREV Name  /  Title  /  Screening type.
+    Detected when ≥3 rows have theatre names starting with a unit number + dash.
+    All rows are treated as active (Open). Phrase field carries the screening type.
+    French titles (e.g. 'La ferme des animaux') are mapped to English equivalents.
+    """
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines:
+        return {}
+
+    # Split rows — handle tab or multi-space separation
+    rows = []
+    for line in lines:
+        if "\t" in line:
+            parts = [p.strip() for p in line.split("\t")]
+        else:
+            parts = [p.strip() for p in re.split(r'  +', line)]
+        if len(parts) >= 3:
+            rows.append(parts)
+
+    if len(rows) < 3:
+        return {}
+
+    # Detection: ≥3 rows where col[0] starts with a digit (unit#)
+    unit_rows = [r for r in rows if re.match(r'^\d', r[0])]
+    if len(unit_rows) < 3:
+        return {}
+
+    # Skip header row if present
+    data_rows = [r for r in rows if re.match(r'^\d', r[0])]
+
+    results: dict[str, list[dict]] = {}
+    for row in data_rows:
+        raw_theatre = row[0]
+        raw_title   = row[1] if len(row) > 1 else ""
+        raw_phrase  = row[2] if len(row) > 2 else ""
+
+        # Strip unit# prefix: "2111 - CPX McGillivray" → "CPX McGillivray"
+        theatre = _UNIT_NUM_RE.sub("", raw_theatre).strip()
+        # Expand abbreviation: "CPX McGillivray" → "Cineplex McGillivray"
+        theatre = _expand_cineplex_abbrev(theatre)
+        # Normalize & → and, strip format suffixes like "+ VIP"
+        theatre = theatre.replace(" & VIP", " VIP").replace("& VIP", "VIP")
+
+        # Normalize film title (French → English)
+        film = raw_title.strip()
+        film = _FRENCH_TITLES.get(film.lower(), film)
+        if not film:
+            continue
+
+        phrase = raw_phrase.strip()
+        results.setdefault(film, []).append({
+            "theatre": theatre,
+            "date":    None,
+            "phrase":  phrase,
+        })
+
+    if not results:
+        return {}
+
+    log(f"  [cineplex-policy] Detected Cineplex policy format — "
+        f"{sum(len(v) for v in results.values())} venue(s) across "
+        f"{len(results)} film(s)")
+    return results
+
+
 def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     """
     Parse booking text and return:
@@ -868,6 +1004,10 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     if not text or not text.strip():
         return {}
 
+    # ── Cineplex/policy format: Theatre# - ABBREV Name / Title / Screening ──────
+    _cx_result = _parse_cineplex_policy_booking(text)
+    if _cx_result:
+        return _cx_result
     # ── Diane Johnson circuit-grid format: early detection ───────────────────
     _dj_result = _parse_diane_johnson_booking(text)
     if _dj_result:
@@ -1133,26 +1273,49 @@ def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: s
             log(f"  WARNING: No venues found for '{contact}' — skipping")
             continue
 
-        if theatre_names:
-            log(f"  Matching {len(theatre_names)} theatre(s) from booking sheet ...")
-            mr = _select_matching_venues(page, theatre_names)
-            n  = mr["selected"]
-            log(f"  Selected {n} matching venue(s)")
-            if n == 0:
-                log("  WARNING: No venue matches found — skipping to avoid updating all venues")
-                log("  Tip: check that theatre names in the booking match venues in the Mica plan")
-                continue
-        else:
+        if not theatre_names:
             log("  WARNING: No theatre list found in booking — skipping to avoid updating all venues")
             log("  Tip: make sure the booking text includes theatre names")
             continue
 
-        page.wait_for_timeout(800)
-        _screenshot(page, f"bp_{_safe(film)}_selected.png")
+        # Group entries by screening type label ('' = Clean/default)
+        from collections import defaultdict as _dd
+        groups: dict[str, list[str]] = _dd(list)
+        for e in entries:
+            label = _bp_screening_label(e.get("phrase", ""))
+            groups[label].append(e["theatre"])
 
-        page.wait_for_timeout(1_200)
-        log("  Setting status → Agreed ...")
-        _set_agreed(page, n)
+        has_multiple_groups = len(groups) > 1
+        total_selected = 0
+
+        for st_label, group_theatres in groups.items():
+            if has_multiple_groups:
+                _clear_all_selections(page)
+
+            log(f"  Matching {len(group_theatres)} theatre(s)"
+                f"{' [' + (st_label or 'Clean') + ']' if has_multiple_groups else ''} ...")
+            mr = _select_matching_venues(page, group_theatres)
+            n  = mr["selected"]
+            log(f"  Selected {n} matching venue(s)")
+            if n == 0:
+                log("  WARNING: No venue matches found for this group — skipping")
+                continue
+
+            page.wait_for_timeout(800)
+
+            if st_label:
+                log(f"  Setting screening type → {st_label} ...")
+                _set_screening_type_bulk(page, st_label)
+
+            page.wait_for_timeout(1_200)
+            log("  Setting status → Agreed ...")
+            _set_agreed(page, n)
+            total_selected += n
+
+        if total_selected == 0:
+            log("  WARNING: No venue matches found — skipping")
+            continue
+
         _screenshot(page, f"bp_{_safe(film)}_agreed.png")
 
         if not plan_default_date:
@@ -2284,6 +2447,83 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
         "missed":     [m["booking"] for m in missed_list],
         "unselected": unselected,
     }
+
+
+def _clear_all_selections(page):
+    """Uncheck all selected row checkboxes."""
+    page.evaluate("""
+    () => {
+        const cbs = Array.from(document.querySelectorAll('table tbody input[type="checkbox"]:checked'));
+        cbs.forEach(cb => cb.click());
+    }
+    """)
+    page.wait_for_timeout(500)
+
+
+def _set_screening_type_bulk(page, screening_label: str):
+    """Click bulk Screenings → select the given type for currently-selected venues."""
+    btn_idx: int = page.evaluate(
+        """
+        () => {
+            const candidates = Array.from(document.querySelectorAll(
+                '[ngbdropdowntoggle], button.dropdown-toggle, button'
+            ));
+            for (let i = 0; i < candidates.length; i++) {
+                const btn = candidates[i];
+                const txt = btn.textContent.trim().toLowerCase();
+                if (!txt.includes('screening')) continue;
+                let el = btn.parentElement;
+                let inRow = false;
+                while (el) {
+                    if (el.tagName === 'TR') { inRow = true; break; }
+                    el = el.parentElement;
+                }
+                if (!inRow) return i;
+            }
+            return -1;
+        }
+        """
+    )
+    if btn_idx < 0:
+        log(f"  WARNING: 'Screenings' bulk button not found — skipping type '{screening_label}'")
+        return
+    all_btns = page.locator('[ngbdropdowntoggle], button.dropdown-toggle, button')
+    btn_handle = all_btns.nth(btn_idx).element_handle()
+    page.evaluate("""el => {
+        el.removeAttribute('disabled');
+        el.classList.remove('disabled');
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    }""", btn_handle)
+    page.wait_for_timeout(800)
+    opt = page.locator(
+        f'.dropdown-menu.show .dropdown-item:has-text("{screening_label}"), '
+        f'.dropdown-menu.show button:has-text("{screening_label}")'
+    ).first
+    if opt.count() == 0:
+        opt = page.locator(
+            f'.dropdown-item:has-text("{screening_label}"), button:has-text("{screening_label}")'
+        ).first
+    if opt.count() == 0:
+        log(f"  WARNING: Screening type '{screening_label}' not found in dropdown")
+        page.keyboard.press("Escape")
+        return
+    page.evaluate("el => el.click()", opt.element_handle())
+    page.wait_for_timeout(800)
+    try:
+        page.wait_for_selector('[role="dialog"], .modal-content', timeout=4_000)
+        cont = page.locator(
+            '[role="dialog"] button:has-text("Continue"), '
+            '.modal-content button:has-text("Continue"), '
+            '[role="dialog"] button:has-text("OK"), '
+            '.modal-content button:has-text("OK")'
+        ).first
+        if cont.count() > 0:
+            page.evaluate("el => el.click()", cont.element_handle())
+            page.wait_for_timeout(500)
+    except PlaywrightTimeout:
+        pass
+    log(f"  Screening type set: {screening_label}")
+    page.wait_for_timeout(1_000)
 
 
 def _select_all(page):

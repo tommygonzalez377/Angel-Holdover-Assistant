@@ -111,8 +111,11 @@ PHRASE_TO_SCREENING: list[tuple[str, str]] = [
     ("mats+ee",     "Alternating"),
     ("lm+ee",       "Alternating"),
     ("em+le",       "Alternating"),
+    ("em+ee",       "Alternating"),   # Early Mats + Early Evenings
+    ("em + ee",     "Alternating"),
     ("1 mat",       "Single Matinee"),
     ("mats",        "Multiple Matinees"),
+    ("lm",          "Multiple Matinees"),   # Late Mats
     ("mat",         "Single Matinee"),
     ("prime",       "Prime"),
     ("split",       "Alternating"),
