@@ -2057,6 +2057,11 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "lansing 19 + c premium xl":        "Celebration Lansing Imax",
     "mt. pleasant 11":                  "Celebration Mt Pleasant",
     "benton harbor 14 + dbox":          "Celebration Benton Harbor",
+    # Hooky Entertainment / Tammy Flores — Hutto has no city in venue name; RedStone spelling
+    "hooky entertainment + sdx + imax, hutto": "Hooky Entertainment + SDX + IMAX Hutto 8",
+    "hooky entertainment + sdx + imax":        "Hooky Entertainment + SDX + IMAX Hutto 8",
+    "redstone 14 cinemas w/pdx":               "Red Stone 14 Cinemas",
+    "redstone 14 cinemas":                     "Red Stone 14 Cinemas",
 }
 
 
