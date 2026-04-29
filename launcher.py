@@ -513,7 +513,7 @@ HTML = r"""<!DOCTYPE html>
   <h1>Angel Studios</h1>
   <div id="user-nav" style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;">
     <span id="user-email" style="color:#aaa;"></span>
-    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">4/28 10:15AM Update</span>
+    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">4/28 11:45AM Update</span>
     <a href="/aliases" style="color:#aaa;text-decoration:none;font-size:12px;">Venue Aliases</a>
     <a id="profile-link" href="/auth/profile" style="color:#00bcd4;text-decoration:none;display:none;">My Profile</a>
     <a id="logout-link" href="/auth/logout" style="color:#888;text-decoration:none;display:none;">Sign Out</a>
@@ -632,7 +632,16 @@ HTML = r"""<!DOCTYPE html>
         <textarea id="booking-paste-area" placeholder="Ctrl+V to paste booking text here."></textarea>
       </div>
 
-      <input id="booking-contact" class="booking-field" placeholder="Contact / Booker">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <select id="booking-filter-type" style="background:#1e1e2e;color:#ccc;border:1px solid #333;border-radius:6px;padding:10px 8px;font-size:13px;flex:0 0 auto;">
+          <option value="contact_person">Contact Person</option>
+          <option value="booker">Booker</option>
+          <option value="venue_group">Venue Group</option>
+          <option value="tv_market">TV Market</option>
+          <option value="capabilities">Capabilities</option>
+        </select>
+        <input id="booking-contact" class="booking-field" placeholder="Filter value" style="flex:1;margin:0;">
+      </div>
       <input id="booking-title"   class="booking-field" placeholder="Title (e.g. Solo Mio)">
 
       <div id="booking-mode-toggle">
@@ -1305,9 +1314,10 @@ function setMassMode(mode) {
 }
 
 async function runBookingUpdate() {
-  const contact = document.getElementById('booking-contact').value.trim();
-  const title   = document.getElementById('booking-title').value.trim();
-  if (!contact) { alert('Please fill in the Contact / Booker field.'); return; }
+  const contact     = document.getElementById('booking-contact').value.trim();
+  const title       = document.getElementById('booking-title').value.trim();
+  const filter_type = document.getElementById('booking-filter-type').value;
+  if (!contact) { alert('Please fill in the filter value field.'); return; }
   if (!title)   { alert('Please fill in the Title field.'); return; }
 
   const btn = document.getElementById('booking-run-btn');
@@ -1325,7 +1335,7 @@ async function runBookingUpdate() {
     const res = await fetch('/booking-plan-update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contact, title, booking, mode: bookingMode }),
+      body: JSON.stringify({ contact, title, booking, mode: bookingMode, filter_type }),
     });
     ({ job_id } = await res.json());
   } catch (err) {
@@ -2110,12 +2120,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 self.send_response(400); self.end_headers(); return
 
-            title   = payload.get('title',   '').strip()
-            contact = payload.get('contact', '').strip()
-            booking = payload.get('booking', '').strip()
-            mode    = payload.get('mode', 'demo').strip()
+            title       = payload.get('title',       '').strip()
+            contact     = payload.get('contact',     '').strip()
+            booking     = payload.get('booking',     '').strip()
+            mode        = payload.get('mode',        'demo').strip()
+            filter_type = payload.get('filter_type', 'contact_person').strip()
             if mode not in ('demo', 'prod'):
                 mode = 'demo'
+            if filter_type not in ('contact_person', 'booker', 'venue_group', 'tv_market', 'capabilities'):
+                filter_type = 'contact_person'
 
             # Write booking text to a temp file for the script
             booking_path = BASE_DIR / 'booking_plan_input.txt'
@@ -2135,7 +2148,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             _job_queues[job_id] = queue.Queue()
             threading.Thread(
                 target=_run_booking_plan,
-                args=(title, contact, booking_path, job_id, mode, user_creds),
+                args=(title, contact, booking_path, job_id, mode, user_creds, filter_type),
                 daemon=True,
             ).start()
 
@@ -2797,7 +2810,7 @@ def _ensure_bp_daemon(slot: int, mode: str, user_creds: dict):
 # Booking plan runner (background thread)
 # ---------------------------------------------------------------------------
 
-def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str, mode: str = 'demo', user_creds: dict = {}):
+def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str, mode: str = 'demo', user_creds: dict = {}, filter_type: str = 'contact_person'):
     import json as _json
     q = _job_queues[job_id]
     try:
@@ -2812,6 +2825,7 @@ def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str,
                 'title': title,
                 'contact': contact,
                 'booking_text': booking_text,
+                'filter_type': filter_type,
             })
             _bp_procs[slot].stdin.write(job_payload + '\n')
             _bp_procs[slot].stdin.flush()

@@ -1077,7 +1077,7 @@ def _navigate_to_plans(page, ctx):
         sys.exit(1)
 
 
-def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: str = "demo"):
+def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: str = "demo", filter_type: str = "contact_person"):
     """Execute booking plan updates for all films using an existing page/ctx."""
     for film, entries in films_theatres.items():
         theatre_names = [e["theatre"] for e in entries]
@@ -1122,8 +1122,8 @@ def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: s
         log(f"  Plan default start date: {plan_default_date or 'unknown'}")
         _screenshot(page, f"bp_{_safe(film)}_detail.png")
 
-        log(f"  Filtering by Venue Group / Contact: {contact!r} ...")
-        _filter_by_buyer(page, contact)
+        log(f"  Filtering by {filter_type}: {contact!r} ...")
+        _filter_by_buyer(page, contact, filter_type=filter_type)
         _screenshot(page, f"bp_{_safe(film)}_filtered.png")
 
         _expand_table_page_size(page)
@@ -1224,6 +1224,7 @@ def run_daemon(mode: str = "demo"):
                 title        = job.get("title", "")
                 contact      = job.get("contact", "")
                 booking_text = job.get("booking_text", "")
+                filter_type  = job.get("filter_type", "contact_person")
 
                 films_theatres = parse_open_bookings(booking_text)
                 if not films_theatres:
@@ -1257,7 +1258,7 @@ def run_daemon(mode: str = "demo"):
                     except PlaywrightTimeout:
                         pass
 
-                _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode)
+                _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode, filter_type=filter_type)
                 log("\n✓ Booking plan update complete!")
                 print("__JOB_DONE__", flush=True)
 
@@ -1281,7 +1282,7 @@ def run_daemon(mode: str = "demo"):
                         _navigate_to_plans(page, ctx)
                         log("[daemon] Browser relaunched — retrying job ...")
                         try:
-                            _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode)
+                            _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode, filter_type=filter_type)
                             log("\n✓ Booking plan update complete!")
                             print("__JOB_DONE__", flush=True)
                         except Exception as retry_exc:
@@ -1302,7 +1303,7 @@ def run_daemon(mode: str = "demo"):
             pass
 
 
-def run_booking_plan_update(title: str, contact: str, booking_text: str = ""):
+def run_booking_plan_update(title: str, contact: str, booking_text: str = "", filter_type: str = "contact_person", mode: str = "demo"):
     """
     For each film found in booking_text with 'Open' actions:
       - If `title` is given, process only that film.
@@ -1369,7 +1370,7 @@ def run_booking_plan_update(title: str, contact: str, booking_text: str = ""):
 
     try:
         _navigate_to_plans(page, ctx)
-        _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode)
+        _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode, filter_type=filter_type)
         log("\n✓ Booking plan update complete!")
 
         # Keep browser open for review (local mode only)
@@ -1897,8 +1898,18 @@ def _filter_by_circuit(page, circuit: str) -> bool:
     return False
 
 
-def _filter_by_buyer(page, contact: str):
-    """Set the Contact Person ng-select on the plan detail page."""
+_FILTER_TYPE_HINTS: dict = {
+    "contact_person": ["contact person"],
+    "booker":         ["booker"],
+    "venue_group":    ["venue group"],
+    "tv_market":      ["tv market"],
+    "capabilities":   ["capabilities"],
+}
+
+
+def _filter_by_buyer(page, contact: str, filter_type: str = "contact_person"):
+    """Set the specified ng-select filter on the plan detail page."""
+    hints = _FILTER_TYPE_HINTS.get(filter_type, ["contact person"])
     idx: int = page.evaluate(
         """
         (hints) => {
@@ -1914,10 +1925,10 @@ def _filter_by_buyer(page, contact: str):
             return -1;
         }
         """,
-        ["contact person"],
+        hints,
     )
     if idx < 0:
-        log("  WARNING: Venue filter ng-select not found — venues may not be filtered")
+        log(f"  WARNING: '{filter_type}' ng-select not found — venues may not be filtered")
         return
     ng_sel = page.locator("ng-select").nth(idx)
     try:
@@ -2905,6 +2916,10 @@ if __name__ == "__main__":
                         help="Optional circuit/chain filter (e.g. 'Cineplex') applied before matching")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview matches without making any changes in Mica")
+    parser.add_argument("--filter-type",
+                        choices=["contact_person", "booker", "venue_group", "tv_market", "capabilities"],
+                        default="contact_person",
+                        help="Which Mica plan dropdown to filter by (default: contact_person)")
     parser.add_argument("--daemon", action="store_true",
                         help="Persistent mode: read JSON jobs from stdin, keep browser open")
     args = parser.parse_args()
@@ -2941,4 +2956,5 @@ if __name__ == "__main__":
         else:
             run_mass_booking_plan_update(args.title, booking_text)
     else:
-        run_booking_plan_update(args.title, args.contact, booking_text)
+        run_booking_plan_update(args.title, args.contact, booking_text,
+                                filter_type=args.filter_type, mode=args.mode)
