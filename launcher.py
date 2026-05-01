@@ -513,7 +513,7 @@ HTML = r"""<!DOCTYPE html>
   <h1>Angel Studios</h1>
   <div id="user-nav" style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;">
     <span id="user-email" style="color:#aaa;"></span>
-    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">4/27 2PM Update</span>
+    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">5/1 10AM Update</span>
     <a href="/aliases" style="color:#aaa;text-decoration:none;font-size:12px;">Venue Aliases</a>
     <a id="profile-link" href="/auth/profile" style="color:#00bcd4;text-decoration:none;display:none;">My Profile</a>
     <a id="logout-link" href="/auth/logout" style="color:#888;text-decoration:none;display:none;">Sign Out</a>
@@ -578,7 +578,16 @@ HTML = r"""<!DOCTYPE html>
       <textarea id="paste-area" placeholder="Ctrl+V to paste a screenshot OR booking text here. For screenshots, Windows OCR will extract FINAL locations automatically."></textarea>
     </div>
 
-    <input id="mica-contact" placeholder="Contact / Booker (auto-filled from booking)">
+    <div style="display:flex;gap:8px;align-items:center;">
+      <select id="mica-filter-type" style="background:#1e1e2e;color:#ccc;border:1px solid #333;border-radius:6px;padding:10px 8px;font-size:13px;flex:0 0 auto;">
+        <option value="contact_person">Contact Person</option>
+        <option value="booker">Booker</option>
+        <option value="venue_group">Venue Group</option>
+        <option value="tv_market">TV Market</option>
+        <option value="capabilities">Capabilities</option>
+      </select>
+      <input id="mica-contact" placeholder="Filter value (auto-filled from booking)" style="flex:1;margin:0;">
+    </div>
 
     <div id="mica-mode-toggle">
       <button class="mode-btn active" id="mode-demo" onclick="setMicaMode('demo')">Demo</button>
@@ -1192,11 +1201,12 @@ function setMicaMode(mode) {
 
 // ── Mica update (auto-triggered after Part 1, or manually via button) ────
 async function runMica() {
-  const contact = document.getElementById('mica-contact').value.trim();
+  const contact     = document.getElementById('mica-contact').value.trim();
+  const filter_type = document.getElementById('mica-filter-type').value;
   // Use cached booking text OR whatever is currently in the paste box
   const booking = lastBookingText || document.getElementById('paste-area').value.trim();
 
-  if (!contact) { alert('Please fill in the Contact / Booker field.'); return; }
+  if (!contact) { alert('Please fill in the filter value field.'); return; }
   if (!booking) { alert('Please paste the booking data in the text box first.'); return; }
 
   const btn = document.getElementById('mica-run-btn');
@@ -1215,7 +1225,7 @@ async function runMica() {
     const res = await fetch('/mica-update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contact, booking, mode: micaMode }),
+      body: JSON.stringify({ contact, booking, mode: micaMode, filter_type }),
     });
     const data = await res.json();
     job_id = data.job_id;
@@ -2076,11 +2086,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 self.send_response(400); self.end_headers(); return
 
-            contact = payload.get('contact', '').strip()
-            booking = payload.get('booking', '').strip()
-            mode    = payload.get('mode', 'demo').strip()
+            contact     = payload.get('contact', '').strip()
+            booking     = payload.get('booking', '').strip()
+            mode        = payload.get('mode', 'demo').strip()
+            filter_type = payload.get('filter_type', 'contact_person').strip()
             if mode not in ('demo', 'prod'):
                 mode = 'demo'
+            if filter_type not in ('contact_person', 'booker', 'venue_group', 'tv_market', 'capabilities'):
+                filter_type = 'contact_person'
 
             # Write booking to a temp CSV
             booking_path = BASE_DIR / 'mica_booking.csv'
@@ -2096,12 +2109,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 else:
                     user_creds = _db.get_credentials(_LOCAL_USER_ID)  # local mode: single user
 
-            print(f'[mica-update] contact={contact!r} creds=mica:{bool(user_creds.get("mica_user"))}', flush=True)
+            print(f'[mica-update] contact={contact!r} filter_type={filter_type!r} creds=mica:{bool(user_creds.get("mica_user"))}', flush=True)
             job_id = 'mica_' + str(int(time.time() * 1000))
             _job_queues[job_id] = queue.Queue()
             threading.Thread(
                 target=_run_mica,
-                args=(booking_path, contact, job_id, mode, user_creds),
+                args=(booking_path, contact, job_id, mode, user_creds, filter_type),
                 daemon=True,
             ).start()
 
@@ -2710,7 +2723,7 @@ def _run_tool(csv_path: Path, job_id: str, user_creds: dict = {}):
 # Mica runner (background thread)
 # ---------------------------------------------------------------------------
 
-def _run_mica(booking_path: Path, contact: str, job_id: str, mode: str = "demo", user_creds: dict = {}):
+def _run_mica(booking_path: Path, contact: str, job_id: str, mode: str = "demo", user_creds: dict = {}, filter_type: str = "contact_person"):
     q = _job_queues[job_id]
     try:
         proc = subprocess.Popen(
@@ -2720,6 +2733,7 @@ def _run_mica(booking_path: Path, contact: str, job_id: str, mode: str = "demo",
                 str(booking_path),
                 '--contact', contact,
                 '--mode', mode,
+                '--filter-type', filter_type,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

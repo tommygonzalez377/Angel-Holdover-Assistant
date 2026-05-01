@@ -1356,7 +1356,7 @@ def parse_booking_csv(path: Path) -> list[dict]:
 # Playwright automation
 # ---------------------------------------------------------------------------
 
-def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo"):
+def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo", filter_type: str = "contact_person"):
     """Main Playwright automation entry point. mode: 'demo' or 'prod'."""
     global _active_mica_url, _active_auth_file
     mica_url = MICA_URLS.get(mode, MICA_URLS["demo"])
@@ -1391,6 +1391,7 @@ def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo"):
 
     log(f"Mode       : {mode.upper()}")
     log(f"Contact    : {contact}")
+    log(f"Filter type: {filter_type}")
     log(f"Finals     : {len(finals)}")
     log(f"Holds      : {len(holds)}")
     log("")
@@ -1461,7 +1462,7 @@ def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo"):
 
             log("Applying filters ...")
             _dismiss_popups(page)
-            _apply_filters(page, contact)
+            _apply_filters(page, contact, filter_type=filter_type)
             _screenshot(page, "mica_filtered.png")
             # Dismiss any popup (e.g. Numero error) that appeared during filter application
             _dismiss_popups(page)
@@ -1717,11 +1718,18 @@ def _set_ng_select_by_locator(page, ng_sel, value: str) -> bool:
         return False
 
 
-def _apply_filters(page, contact: str):
+_FILTER_TYPE_LABELS: dict[str, list[str]] = {
+    "contact_person": ["Contact(s)", "Contact"],
+    "booker":         ["Booker", "Booker(s)"],
+    "venue_group":    ["Venue Group", "Venue Group(s)"],
+    "tv_market":      ["TV Market", "TV Market(s)"],
+    "capabilities":   ["Capabilities", "Capability"],
+}
+
+def _apply_filters(page, contact: str, filter_type: str = "contact_person"):
     """
-    Apply Contact filter via Mica's Filter modal.
-    The green '+ Add' button opens a modal with Country / Exhibitor(s) / Contact(s).
-    We set Contact(s) and click Save. Production filter is skipped — row selection handles it.
+    Apply a filter via Mica's Filter modal.
+    The green '+ Add' button opens a modal; we target the ng-select matching filter_type.
     """
     # Clear any existing filters first via the 'Clear filters' link
     log("  Clearing existing filters ...")
@@ -1788,19 +1796,22 @@ def _apply_filters(page, contact: str):
     except PlaywrightTimeout:
         log("  WARNING: ng-select not visible in filter modal yet — proceeding anyway")
 
-    # Set the Contact(s) ng-select (modal has: Country, Exhibitor(s), Contact(s))
-    log(f"  Setting Contact(s): {contact}")
-    set_ok = _set_ng_select(page, "Contact(s)", contact)
-    if not set_ok:
-        set_ok = _set_ng_select(page, "Contact", contact)
+    # Set the target ng-select based on filter_type
+    labels = _FILTER_TYPE_LABELS.get(filter_type, _FILTER_TYPE_LABELS["contact_person"])
+    log(f"  Setting {labels[0]}: {contact}")
+    set_ok = False
+    for lbl in labels:
+        set_ok = _set_ng_select(page, lbl, contact)
+        if set_ok:
+            break
     if not set_ok:
         # Positional fallback: Contact(s) is the 3rd ng-select in the modal (0-indexed: 2)
-        log(f"  Trying positional fallback for Contact(s) (3rd ng-select in modal)...")
+        log(f"  Trying positional fallback for {labels[0]} (3rd ng-select in modal)...")
         modal_ng = page.locator('[role="dialog"] ng-select, .modal-content ng-select, .modal ng-select')
         if modal_ng.count() >= 3:
             set_ok = _set_ng_select_by_locator(page, modal_ng.nth(2), contact)
         if not set_ok:
-            log(f"  WARNING: Could not set Contact filter for '{contact}'")
+            log(f"  WARNING: Could not set {labels[0]} filter for '{contact}'")
 
     _screenshot(page, "mica_filter_contact_set.png")
 
@@ -2710,8 +2721,11 @@ def _ensure_holdovers_page(page, contact: str = ""):
 def main():
     parser = argparse.ArgumentParser(description="Update Mica booking statuses")
     parser.add_argument("csv_file",  help="Path to booking CSV")
-    parser.add_argument("--contact", required=True, help='Contact/booker name in Mica (e.g. "Ashley Hensley")')
-    parser.add_argument("--mode",    choices=["demo", "prod"], default="demo", help="demo or prod (default: demo)")
+    parser.add_argument("--contact",     required=True, help='Contact/booker name in Mica (e.g. "Ashley Hensley")')
+    parser.add_argument("--mode",        choices=["demo", "prod"], default="demo", help="demo or prod (default: demo)")
+    parser.add_argument("--filter-type", dest="filter_type",
+                        choices=["contact_person", "booker", "venue_group", "tv_market", "capabilities"],
+                        default="contact_person", help="Which Mica filter dropdown to use (default: contact_person)")
     args = parser.parse_args()
 
     csv_path = Path(args.csv_file)
@@ -2732,7 +2746,7 @@ def main():
         log(f"  [{t['action']:5s}] {t['theatre']}  {st}")
     log("")
 
-    run_mica_update(args.contact, theatres, mode=args.mode)
+    run_mica_update(args.contact, theatres, mode=args.mode, filter_type=args.filter_type)
 
 
 if __name__ == "__main__":
