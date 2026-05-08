@@ -113,6 +113,7 @@ PHRASE_TO_SCREENING: list[tuple[str, str]] = [
     ("em+le",       "Alternating"),
     ("em+ee",       "Alternating"),   # Early Mats + Early Evenings
     ("em + ee",     "Alternating"),
+    ("matinee shows","Alternating"),
     ("1 mat",       "Single Matinee"),
     ("mats",        "Multiple Matinees"),
     ("em",          "Multiple Matinees"),
@@ -237,9 +238,11 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
 
     _NAME_MAP = {'SALES': 'Buyer', 'THEATRE': 'Theatre', 'THEATER': 'Theatre',
                  'SCR': 'Screens', '#': 'Unit', 'DMA': 'DMA', 'BRCH': 'Branch',
-                 'BRANCH': 'Branch', 'SCREENS': 'Screens'}
+                 'BRANCH': 'Branch', 'SCREENS': 'Screens',
+                 'BOOK': 'Action',    # Michael Eiff / Cinemark single-film format
+                 'PRINTS': 'Action'}  # Andy Anderson SF Bay Area format
     _CINEMARK_BARE = {'DMA', 'SALES', '#', 'THEATRE', 'THEATER', 'SCR', 'SCREENS',
-                      'CHAIN', 'CIRCUIT', 'BRCH', 'BRANCH'}
+                      'CHAIN', 'CIRCUIT', 'BRCH', 'BRANCH', 'BOOK', 'PRINTS'}
 
     # Parse preserving space-only lines as empty cell values.
     # Blank separator lines (truly empty after strip) are skipped.
@@ -457,11 +460,15 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
     if bare_start is not None:
         headers = []
         blank_count = 0
+        _book_action = False  # True when 'BOOK' col is explicit → blank means skip, not Final
         i = bare_start
         while i < len(cell_values):
             v = cell_values[i]
             if v.upper() in _CINEMARK_BARE or v == '#':
-                headers.append(_NAME_MAP.get(v.upper(), v))
+                mapped = _NAME_MAP.get(v.upper(), v)
+                if v.upper() == 'BOOK':
+                    _book_action = True
+                headers.append(mapped)
                 blank_count = 0
                 i += 1
             elif v == '' and blank_count < 2:
@@ -499,8 +506,17 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
                 if len(row_data) < n_cols:
                     row_data += [''] * (n_cols - len(row_data))
                 row = dict(zip(headers, row_data[:n_cols]))
-                if row.get('Action', '') == '':
+                # Blank action: Final for dunder formats; skip for explicit BOOK column
+                if row.get('Action', '') == '' and not _book_action:
                     row['Action'] = 'Final'
+                # Strip "(City, ST)" from Theatre and populate City if missing
+                _th_val = row.get('Theatre', '')
+                _city_m = _THEATRE_RE.search(_th_val)
+                if _city_m:
+                    _cs = _city_m.group(0)[1:-1]  # e.g. "Cuyahoga Falls, OH"
+                    row['Theatre'] = (_th_val[:_city_m.start()] + _th_val[_city_m.end():]).strip()
+                    if not row.get('City'):
+                        row['City'] = _cs.split(',')[0].strip()
                 rows.append(row)
             return rows
         else:
@@ -644,7 +660,11 @@ def parse_booking_csv(path: Path) -> list[dict]:
         # anchor: "<gross> [Split screen. ]?<Final|Holdover|Opening>".
         # Film title tracks across lines (blank merged cell in PDF → same film).
         # "Split screen. Holdover" → Hold/Alternating; "Holdover" → Hold/Clean.
-        _is_amc_hdr = any('AMC Film Programmer' in l for l in stripped_lines[:15])
+        _is_amc_hdr = (
+            any('AMC Film Programmer' in l for l in stripped_lines[:15])
+            or any(re.search(r'Split\s+[Ss]creen\.\s+(?:Final|Holdover)', l) for l in stripped_lines)
+            or any(re.search(r'\b[\d,]+[ ]+(?:Split[ ]+[Ss]creen\.[ ]+)?(?:Final|Holdover)\b', l) for l in stripped_lines)
+        )
         if _is_amc_hdr:
             _DMA_RE_amc = re.compile(
                 r'\b([A-Z]{2,}[A-Z0-9\-&\/]*(?:\s+[A-Z]{2,}[A-Z0-9\-&\/]*)*)'
@@ -699,6 +719,44 @@ def parse_booking_csv(path: Path) -> list[dict]:
             log(f"  [amc-holdover] parsed {len(results)} results")
             return results
         # ── End AMC Holdover Report format ────────────────────────────────────
+
+        # ── Holdover grid format (David Saunders / indie circuits) ───────────
+        # Detected by "PRELIMINARY HOLD OVERS" anywhere in the text.
+        # Tab-delimited: THEATRE | FILM | hold_x | F | S | S | M | T | W | T | undecided_x
+        # col[2]='x' → Hold; cols[3-9] any 'x' → Final; col[10]='x' → skip.
+        _full_text_hg = ''.join(lines)
+        if 'preliminary hold overs' in _full_text_hg.lower():
+            _hg_results: list[dict] = []
+            _SKIP_HG = {'theatre', 'theater', 'theatres', 'theaters', 'film', 'title', 'attraction'}
+            for _hl in _full_text_hg.splitlines():
+                _hc = _hl.split('\t')
+                if len(_hc) < 3:
+                    continue
+                _th_hg  = _hc[0].strip()
+                _film_hg = _hc[1].strip() if len(_hc) > 1 else ''
+                if not _th_hg or not _film_hg:
+                    continue
+                if _th_hg.lower() in _SKIP_HG or _film_hg.lower() in _SKIP_HG:
+                    continue
+                _hold_x_hg     = _hc[2].strip().lower() if len(_hc) > 2 else ''
+                _day_xs_hg     = [_hc[i].strip().lower() for i in range(3, min(10, len(_hc)))]
+                _undecided_hg  = _hc[10].strip().lower() if len(_hc) > 10 else ''
+                if _undecided_hg == 'x':
+                    continue
+                elif _hold_x_hg == 'x':
+                    _act_hg, _phrase_hg = 'Hold', ''
+                elif any(x == 'x' for x in _day_xs_hg):
+                    _act_hg, _phrase_hg = 'Final', ''
+                else:
+                    continue
+                _st_hg = get_screening_type(_phrase_hg) if _act_hg == 'Hold' else None
+                _hg_results.append({'theatre': _th_hg, 'city': '', 'action': _act_hg,
+                                    'film': _film_hg, 'phrase': _phrase_hg,
+                                    'screening_type': _st_hg})
+            if _hg_results:
+                log(f"  [holdover-grid] parsed {len(_hg_results)} results")
+                return _hg_results
+        # ── End holdover grid format ───────────────────────────────────────────
 
         # ── Cinemark "Theater # / Name (City, State)" TSV format ─────────────
         # Header row starts with "Theater #\t...".  Preamble lines before the
@@ -1209,7 +1267,7 @@ def parse_booking_csv(path: Path) -> list[dict]:
                     results.append({"theatre": _clean_th, "city": _city_th2,
                                     "action": _a, "film": film,
                                     "phrase": _ph, "screening_type": get_screening_type(_ph) if _a == 'Hold' else None})
-                if _ndcols_th > 0 and _grp_th > 0:
+                if _ndcols_th > 0 and _grp_th > 0 and _preamble_films_th:
                     # Date-column grouping: action[i] → preamble_films[i*grp : (i+1)*grp]
                     for _ai, _act_th in enumerate(_acts):
                         _fs = _ai * _grp_th
@@ -1255,6 +1313,79 @@ def parse_booking_csv(path: Path) -> list[dict]:
             log(f"  [ma-3col] parsed {len(results)} results")
             return results
         # ── End headerless 3-column format ───────────────────────────────────────
+
+        # ── Clark Film Buying PDF holdover format ─────────────────────────────
+        # PDF copy-paste: CITY, ST header lines separate venue groups.
+        # Each venue row: Theatre Film Dist Format Week Rank 3Day H|F * [Yes] [Notes]
+        # H = Hold; F = Final; Split col Yes → Alternating screening type.
+        # Detection: ≥2 all-caps "CITY, ST" lines + ≥2 rows matching the anchor pattern.
+        _CFB_CITY_RE = _re_pbc.compile(r'^[A-Z][A-Z\s]+,\s*[A-Z]{2}$')
+        _CFB_ROW_RE  = _re_pbc.compile(
+            r'^(.+?)\s+([A-Z]{2,5})\s+(\S+)\s+(\d+)\s+(\d+/\d+)\s+(\d+)\s+(H|F)\s+\*\s*(Yes)?\s*(.*)$'
+        )
+        _full_cfb    = ''.join(lines)
+        _cfb_all     = _full_cfb.splitlines()
+        _n_cfb_city  = sum(1 for l in _cfb_all if _CFB_CITY_RE.match(l.strip()))
+        _n_cfb_rows  = sum(1 for l in _cfb_all if _CFB_ROW_RE.match(l.strip()))
+        _is_cfb      = _n_cfb_city >= 2 and _n_cfb_rows >= 2
+
+        if _is_cfb:
+            from collections import Counter as _Counter_cfb
+            # Pre-pass: collect all "Theatre Film" prefix strings
+            _cfb_prefixes = [
+                _CFB_ROW_RE.match(l.strip()).group(1).strip()
+                for l in _cfb_all if _CFB_ROW_RE.match(l.strip())
+            ]
+            # Film titles = 2-word suffixes appearing in ≥2 rows
+            _cfb_film_freq = _Counter_cfb(
+                ' '.join(p.split()[-2:]) for p in _cfb_prefixes if len(p.split()) >= 2
+            )
+            _cfb_known_films = {s for s, c in _cfb_film_freq.items() if c >= 2}
+
+            _cfb_results: list[dict] = []
+            _city_cfb = ''
+            for _ln in _cfb_all:
+                _ls = _ln.strip()
+                if not _ls:
+                    continue
+                if _CFB_CITY_RE.match(_ls):
+                    _city_cfb = _ls.split(',')[0].strip().title()
+                    continue
+                _m = _CFB_ROW_RE.match(_ls)
+                if not _m:
+                    continue
+                _th_film    = _m.group(1).strip()
+                _action_cfb = 'Final' if _m.group(7).upper() == 'F' else 'Hold'
+                _split_yes  = bool(_m.group(8))
+                # Separate theatre from film: try 2-word suffix first, else fallback
+                _words = _th_film.split()
+                _theatre_cfb = _th_film
+                _film_cfb    = ''
+                for _nf in (2, 3):
+                    if len(_words) > _nf and ' '.join(_words[-_nf:]) in _cfb_known_films:
+                        _theatre_cfb = ' '.join(_words[:-_nf])
+                        _film_cfb    = ' '.join(_words[-_nf:])
+                        break
+                else:
+                    # Fallback: last 2 words = film title
+                    if len(_words) >= 3:
+                        _theatre_cfb = ' '.join(_words[:-2])
+                        _film_cfb    = ' '.join(_words[-2:])
+                _phrase_cfb = 'shows' if _split_yes and _action_cfb == 'Hold' else ''
+                _st_cfb     = get_screening_type(_phrase_cfb) if _action_cfb == 'Hold' else None
+                _cfb_results.append({
+                    'theatre':        _theatre_cfb,
+                    'city':           _city_cfb,
+                    'action':         _action_cfb,
+                    'film':           _film_cfb,
+                    'phrase':         _phrase_cfb,
+                    'screening_type': _st_cfb,
+                })
+
+            if _cfb_results:
+                log(f"  [clark-cfb] {_n_cfb_city} cities, films={sorted(_cfb_known_films)}, parsed {len(_cfb_results)} results")
+                return _cfb_results
+        # ── End Clark Film Buying PDF format ──────────────────────────────────
 
         _opl_rows = _parse_one_per_line_to_dicts(content)
         log(f"  [debug] one-per-line returned {len(_opl_rows)} rows; first values: {[l.strip() for l in content.splitlines() if l.strip()][:5]}")
@@ -1384,10 +1515,15 @@ def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo", filt
         _seen[(t["theatre"], t.get("film", ""))] = t
     holds = list(_seen.values())
 
-    # Finals take precedence: if the same (theatre, film) appears in both lists,
-    # remove it from holds so its screening type is never changed.
-    _final_keys = {(t["theatre"], t.get("film", "")) for t in finals}
-    holds = [t for t in holds if (t["theatre"], t.get("film", "")) not in _final_keys]
+    # Holds take precedence over Finals for the same theatre.
+    # Normalize film title (strip "- OC", "- Dub:...", "- 2D/OC" etc.) so that a venue
+    # appearing as Hold for the main film AND Final for an OC/dub variant is treated as
+    # one row — the Hold wins (it's still running this week).
+    def _base_film(film: str) -> str:
+        return re.sub(r'\s*[-–]\s*(OC|2D|3D|IMAX|XD|Dub.*|Combo.*).*', '', film, flags=re.I).strip().lower()
+
+    _hold_base_keys = {(t["theatre"].lower(), _base_film(t.get("film", ""))) for t in holds}
+    finals = [t for t in finals if (t["theatre"].lower(), _base_film(t.get("film", ""))) not in _hold_base_keys]
 
     log(f"Mode       : {mode.upper()}")
     log(f"Contact    : {contact}")
@@ -1482,30 +1618,26 @@ def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo", filt
                 else:
                     log(f"  Status -> Final  OK ({n} rows)")
 
-            # ---------- Holds (grouped by screening type) ----------
+            # ---------- Holds (one row at a time: status → screening type) ----------
             if holds:
-                by_st: dict[str | None, list[dict]] = {}
+                log(f"\n--- Holds ({len(holds)}) ---")
                 for t in holds:
-                    by_st.setdefault(t["screening_type"], []).append(t)
+                    film_label = f"  [{t['film']}]" if t.get("film") else ""
+                    label = t["screening_type"] or "Clean"
+                    log(f"  {t['theatre']}{film_label}  [{t['phrase']}]  -> {label}")
 
-                for screening_type, group in by_st.items():
-                    entries = [{"theatre": t["theatre"], "film": t.get("film", ""), "city": t.get("city", "")} for t in group]
-                    label = screening_type or "Clean (default, no change)"
-                    log(f"\n--- Holds — Screening: {label} ({len(group)}) ---")
-                    for t in group:
-                        film_label = f"  [{t['film']}]" if t.get("film") else ""
-                        log(f"  {t['theatre']}{film_label}  [{t['phrase']}]")
-
-                    if screening_type:
-                        log(f"  Setting screening type per-row ...")
-                        _set_screening_type_per_row(page, entries, screening_type, contact=contact)
-
-                    # Status: click per-row (no re-selection needed)
-                    n = _set_status_per_row(page, entries, "Hold", contact=contact)
-                    if n == 0:
-                        log("  WARNING: No matching rows updated for Holds")
-                    else:
-                        log(f"  Status -> Hold  OK ({n} rows)")
+                hold_updated = 0
+                for t in holds:
+                    entry = [{"theatre": t["theatre"], "film": t.get("film", ""), "city": t.get("city", "")}]
+                    n = _set_status_per_row(page, entry, "Hold", contact=contact)
+                    if n > 0:
+                        hold_updated += n
+                        if t["screening_type"]:
+                            _set_screening_type_per_row(page, entry, t["screening_type"], contact=contact)
+                if hold_updated == 0:
+                    log("  WARNING: No matching rows updated for Holds")
+                else:
+                    log(f"  Holds updated: {hold_updated} rows")
 
             log("\nMica update complete!")
             _screenshot(page, "mica_done.png")
@@ -1718,18 +1850,63 @@ def _set_ng_select_by_locator(page, ng_sel, value: str) -> bool:
         return False
 
 
+def _add_ng_select_value(page, ng_sel, value: str) -> bool:
+    """
+    Add one value to an already-located ng-select without clearing first.
+    Used for multi-select dropdowns where multiple contacts need to be chosen.
+    """
+    try:
+        ng_sel.click()
+        page.wait_for_timeout(400)
+
+        inp = ng_sel.locator('input').first
+        if inp.count() > 0:
+            try:
+                if not inp.is_disabled(timeout=300):
+                    inp.fill(value)
+                    page.wait_for_timeout(600)
+            except Exception:
+                pass
+        else:
+            page.keyboard.type(value)
+            page.wait_for_timeout(600)
+
+        opt = page.locator(f'.ng-option:has-text("{value}"), [role="option"]:has-text("{value}")').first
+        if opt.count() > 0:
+            opt.click()
+            page.wait_for_timeout(300)
+            return True
+
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(200)
+        return False
+    except Exception as e:
+        log(f"  WARNING: _add_ng_select_value('{value}') failed: {e}")
+        return False
+
+
 _FILTER_TYPE_LABELS: dict[str, list[str]] = {
     "contact_person": ["Contact(s)", "Contact"],
     "booker":         ["Booker", "Booker(s)"],
     "venue_group":    ["Venue Group", "Venue Group(s)"],
+    "venue":          ["Venue(s)", "Venue"],
     "tv_market":      ["TV Market", "TV Market(s)"],
     "capabilities":   ["Capabilities", "Capability"],
 }
+
+# Contact name normalisation — maps what users type → what Mica has on file
+_CONTACT_NAME_MAP: dict[str, str] = {
+    "joshua wymer": "Josh Wymer",
+}
+
+def _normalize_contact(name: str) -> str:
+    return _CONTACT_NAME_MAP.get(name.strip().lower(), name.strip())
 
 def _apply_filters(page, contact: str, filter_type: str = "contact_person"):
     """
     Apply a filter via Mica's Filter modal.
     The green '+ Add' button opens a modal; we target the ng-select matching filter_type.
+    If contact is empty, just clear existing filters and return (show all holdovers).
     """
     # Clear any existing filters first via the 'Clear filters' link
     log("  Clearing existing filters ...")
@@ -1737,6 +1914,11 @@ def _apply_filters(page, contact: str, filter_type: str = "contact_person"):
     if clear_link.count() > 0:
         clear_link.click()
         page.wait_for_timeout(600)
+
+    # No contact specified → show all holdovers (multi-buyer sheets like Clark Film Buying)
+    if not contact or not contact.strip():
+        log("  No contact specified — running against all holdovers (no filter)")
+        return
 
     # Wait for the table to stabilise before looking for the Add button
     try:
@@ -1796,22 +1978,75 @@ def _apply_filters(page, contact: str, filter_type: str = "contact_person"):
     except PlaywrightTimeout:
         log("  WARNING: ng-select not visible in filter modal yet — proceeding anyway")
 
-    # Set the target ng-select based on filter_type
+    # Support comma-separated contacts for multi-buyer sheets (e.g. Clark Film Buying)
+    contacts = [_normalize_contact(c) for c in contact.split(',') if c.strip()]
     labels = _FILTER_TYPE_LABELS.get(filter_type, _FILTER_TYPE_LABELS["contact_person"])
-    log(f"  Setting {labels[0]}: {contact}")
-    set_ok = False
+    log(f"  Setting {labels[0]}: {contacts}")
+
+    # Find the ng-select index once (by label proximity), then add each contact value
+    ng_idx = -1
     for lbl in labels:
-        set_ok = _set_ng_select(page, lbl, contact)
-        if set_ok:
+        ng_idx = page.evaluate("""
+        (labelText) => {
+            const allNg = Array.from(document.querySelectorAll('ng-select'));
+            if (allNg.length === 0) return -1;
+            const dialogs = Array.from(document.querySelectorAll(
+                '[role="dialog"], .modal-content, .modal-dialog, .modal.show, .modal.fade.show'
+            ));
+            const root = dialogs.length > 0 ? dialogs[0] : document;
+            const candidates = Array.from(root.querySelectorAll(
+                'label, .label, span, p, a, h1, h2, h3, h4, h5, h6'
+            ));
+            const target = candidates.find(
+                el => el.textContent.trim().toLowerCase().includes(labelText.toLowerCase())
+            );
+            if (!target) return -1;
+            const lr = target.getBoundingClientRect();
+            let best = -1, bestDist = Infinity;
+            allNg.forEach((ns, i) => {
+                const r = ns.getBoundingClientRect();
+                const dist = Math.abs(r.top - lr.bottom) + Math.abs(r.left - lr.left);
+                if (dist < bestDist) { bestDist = dist; best = i; }
+            });
+            return best;
+        }
+        """, lbl)
+        if ng_idx >= 0:
             break
-    if not set_ok:
+
+    if ng_idx < 0:
         # Positional fallback: Contact(s) is the 3rd ng-select in the modal (0-indexed: 2)
         log(f"  Trying positional fallback for {labels[0]} (3rd ng-select in modal)...")
         modal_ng = page.locator('[role="dialog"] ng-select, .modal-content ng-select, .modal ng-select')
         if modal_ng.count() >= 3:
-            set_ok = _set_ng_select_by_locator(page, modal_ng.nth(2), contact)
-        if not set_ok:
-            log(f"  WARNING: Could not set {labels[0]} filter for '{contact}'")
+            ng_idx_fallback = 2  # absolute index in page, not modal
+            # resolve absolute index
+            all_ng_count = page.locator('ng-select').count()
+            modal_ng_el = modal_ng.nth(2)
+            # use _set_ng_select_by_locator for first value, _add_ng_select_value for rest
+            first_ok = _set_ng_select_by_locator(page, modal_ng_el, contacts[0]) if contacts else False
+            if first_ok:
+                for val in contacts[1:]:
+                    _add_ng_select_value(page, modal_ng_el, val)
+            else:
+                log(f"  WARNING: Could not set {labels[0]} filter for {contacts}")
+        else:
+            log(f"  WARNING: Could not set {labels[0]} filter — ng-select not found")
+    else:
+        ng_sel = page.locator('ng-select').nth(ng_idx)
+        # Clear any existing selection before setting the first value
+        try:
+            clr = ng_sel.locator('.ng-clear-wrapper, .ng-value-icon').first
+            if clr.count() > 0:
+                clr.click(timeout=500)
+                page.wait_for_timeout(300)
+        except Exception:
+            pass
+        # Select each contact in sequence
+        for val in contacts:
+            ok = _add_ng_select_value(page, ng_sel, val)
+            if not ok:
+                log(f"  WARNING: Could not select '{val}' in {labels[0]} filter")
 
     _screenshot(page, "mica_filter_contact_set.png")
 
@@ -1925,7 +2160,7 @@ def _select_rows(page, theatre_names: list[str]) -> int:
 
     for entry in result.get("log", []):
         if entry["matched"]:
-            log(f"    MATCH  '{entry['name']}' → score {entry['score']}/{entry['words']} — {entry['rowText'][:60]}")
+            log(f"    MATCH  '{entry['name']}' -> score {entry['score']}/{entry['words']} -- {entry['rowText'][:60]}")
         else:
             reason = entry.get("reason") or f"best score {entry.get('score',0)}/{entry.get('words','')} < threshold {entry.get('threshold','')}"
             log(f"    NO MATCH  '{entry['name']}' ({reason})")
@@ -2098,85 +2333,142 @@ def _bulk_set_screening_type(page, screening_type: str, contact: str = ""):
     """
     _ensure_holdovers_page(page, contact)
     if not _click_bulk_change(page):
-        return  # button not found — skip silently, script continues
-    # Wait for the modal to fully render before interacting
+        return
     try:
-        page.wait_for_selector('[role="dialog"] label', timeout=5_000)
+        page.wait_for_selector('[role="dialog"]', timeout=5_000)
     except PlaywrightTimeout:
         pass
+    page.wait_for_timeout(600)
+
+    # Step 1: Find the "Screening Types" checkbox and click it with bubbling events
+    # so Angular change detection fires.
+    #
+    # Strategy A: scan every checkbox in the modal; walk UP from it and check if
+    # that container's text mentions "Screening" — handles sibling label layouts.
+    # Strategy B: TreeWalker finds any text node containing "Screening", then walks
+    # UP to find a checkbox in an ancestor.
+    # Strategy C: fallback — click the first unchecked checkbox in the modal
+    # (Screening Types is typically first).
+    cb_result = page.evaluate("""
+        () => {
+            const modal = document.querySelector('[role="dialog"]') ||
+                          document.querySelector('.modal-content') ||
+                          document.querySelector('.modal');
+            if (!modal) return 'no_modal';
+
+            function clickCb(cb) {
+                if (!cb.checked) {
+                    cb.click();
+                    cb.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    cb.dispatchEvent(new Event('change', {bubbles: true}));
+                }
+            }
+
+            // Strategy A: find checkboxes, check container text
+            const checkboxes = Array.from(modal.querySelectorAll('input[type="checkbox"]'));
+            for (const cb of checkboxes) {
+                let container = cb.parentElement;
+                for (let i = 0; i < 8 && container && container !== modal; i++) {
+                    const txt = container.innerText || container.textContent || '';
+                    if (/screening/i.test(txt)) {
+                        clickCb(cb);
+                        return 'strat_a_clicked';
+                    }
+                    container = container.parentElement;
+                }
+            }
+
+            // Strategy B: TreeWalker finds "Screening" text node, walks up for checkbox
+            const walker = document.createTreeWalker(modal, NodeFilter.SHOW_TEXT, null);
+            let textNode;
+            while ((textNode = walker.nextNode())) {
+                if (/screening/i.test(textNode.textContent)) {
+                    let el = textNode.parentElement;
+                    for (let i = 0; i < 10 && el && el !== modal; i++) {
+                        const cb = el.querySelector('input[type="checkbox"]');
+                        if (cb) { clickCb(cb); return 'strat_b_clicked'; }
+                        el = el.parentElement;
+                    }
+                }
+            }
+
+            // Strategy C: first unchecked checkbox
+            const first = checkboxes.find(cb => !cb.checked);
+            if (first) { clickCb(first); return 'strat_c_first_of_' + checkboxes.length; }
+
+            return 'not_found_' + checkboxes.length + '_cbs';
+        }
+    """)
+    log(f"  Screening Types checkbox JS: {cb_result}")
+    page.wait_for_timeout(800)
+
+    # Step 2: Open the ng-select for "Screening Types".
+    # After the checkbox is checked, the ng-select for that row should be enabled.
+    # Strategy: find the ng-select in the same container as the "Screening" text;
+    # fallback to the first ng-select in the modal.
+    ns_opened = page.evaluate("""
+        () => {
+            const modal = document.querySelector('[role="dialog"]') ||
+                          document.querySelector('.modal-content') ||
+                          document.querySelector('.modal');
+            if (!modal) return false;
+
+            // Find a text node containing "Screening", walk up to find ng-select sibling
+            const walker = document.createTreeWalker(modal, NodeFilter.SHOW_TEXT, null);
+            let textNode;
+            while ((textNode = walker.nextNode())) {
+                if (/screening/i.test(textNode.textContent)) {
+                    let el = textNode.parentElement;
+                    for (let i = 0; i < 10 && el && el !== modal; i++) {
+                        const ns = el.querySelector('ng-select');
+                        if (ns) {
+                            ns.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                            return true;
+                        }
+                        el = el.parentElement;
+                    }
+                }
+            }
+            // Fallback: first ng-select in modal
+            const first = modal.querySelector('ng-select');
+            if (first) { first.dispatchEvent(new MouseEvent('click', {bubbles: true})); return true; }
+            return false;
+        }
+    """)
+    page.wait_for_timeout(500)
+
+    # Step 3: Select the option from the open dropdown
+    opt = page.locator(f'.ng-option:has-text("{screening_type}")').first
+    if opt.count() > 0:
+        opt.click()
+        log(f"  Selected '{screening_type}' from Bulk Change ng-select")
+    else:
+        # Type to filter then click
+        page.keyboard.type(screening_type[:3])
+        page.wait_for_timeout(400)
+        opt = page.locator(f'.ng-option:has-text("{screening_type}")').first
+        if opt.count() > 0:
+            opt.click()
+            log(f"  Selected '{screening_type}' via type+click")
+        else:
+            log(f"  WARNING: '{screening_type}' not found in Bulk Change dropdown")
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+            return
     page.wait_for_timeout(300)
 
-    # Step 1: Click the "Screening Types" label to toggle its checkbox.
-    # Clicking the visible <label> is more reliable than force-clicking the
-    # hidden native <input>, and properly triggers Angular change detection.
-    label_clicked = False
-    for sel in [
-        '[role="dialog"] label:has-text("Screening Types")',
-        '[role="dialog"] label:has-text("Screening Type")',
-        '.modal-content label:has-text("Screening Types")',
-        '.modal-content label:has-text("Screening Type")',
-    ]:
-        lbl = page.locator(sel).first
-        if lbl.count() > 0:
-            lbl.click()
-            label_clicked = True
-            log("  Checked 'Screening Types' checkbox via label")
-            break
-
-    if not label_clicked:
-        log("  WARNING: 'Screening Types' label not found — force-clicking hidden checkbox")
-        cb_scope = '[role="dialog"] input[type="checkbox"], .modal-content input[type="checkbox"]'
-        screening_cb = page.locator(cb_scope).first
-        if screening_cb.count() > 0:
-            try:
-                screening_cb.click(force=True, timeout=2_000)
-            except Exception as e:
-                log(f"  WARNING: Could not click Screening Types checkbox: {e}")
-
-    # Wait for Angular to enable the ng-select after the checkbox is checked
-    try:
-        page.wait_for_function(
-            """() => {
-                const modal = document.querySelector('[role="dialog"]') ||
-                              document.querySelector('.modal-content');
-                if (!modal) return false;
-                return Array.from(modal.querySelectorAll('ng-select input')).some(
-                    inp => !inp.disabled
-                );
-            }""",
-            timeout=3_000,
-        )
-        log("  ng-select enabled")
-    except PlaywrightTimeout:
-        log("  WARNING: ng-select did not become enabled after checkbox click")
-
-    # Step 2: Set the now-enabled ng-select to the desired screening type.
-    if not _set_ng_select(page, "Screening Types", screening_type):
-        # Fallback: scope to inside the dialog to avoid matching the filter bar's ng-selects
-        log(f"  Fallback: clicking ng-select directly for '{screening_type}'")
-        ng = page.locator('[role="dialog"] ng-select, .modal-content ng-select').first
-        if ng.count() > 0:
-            ng.click()
-            page.wait_for_timeout(400)
-            opt = page.locator(f'.ng-option:has-text("{screening_type}")').first
-            if opt.count() > 0:
-                opt.click()
-            else:
-                log(f"  WARNING: Screening type '{screening_type}' not found in dropdown")
-                page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
-
-    # Step 3: Click Apply — only if the modal is still open
+    # Step 4: Click Apply
     if page.locator('[role="dialog"]').count() == 0:
         log("  WARNING: Bulk Change modal closed unexpectedly — skipping Apply")
         return
 
-    apply_btn = page.locator('[role="dialog"] button:has-text("Apply")').first
-    if apply_btn.count() == 0:
-        apply_btn = page.locator('[role="dialog"] button:has-text("Save")').first
+    apply_btn = page.locator(
+        '[role="dialog"] button:has-text("Apply"), [role="dialog"] button:has-text("Save")'
+    ).first
     if apply_btn.count() > 0:
         apply_btn.click()
         page.wait_for_timeout(1500)
+        log(f"  Applied Bulk Change → {screening_type}")
     else:
         log("  WARNING: Apply/Save button not found in Bulk Change modal")
         page.keyboard.press("Escape")
@@ -2206,6 +2498,16 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "cinemark 14, denton":       "cinemark denton 14",
     "cinemark 12, sherman":      "cinemark sherman 12",
     "movies 8, paris":           "cinemark movies paris 8",
+    "cinemark west plano, plano":             "cinemark movies plano 10",
+    "cinemark west plano":                    "cinemark movies plano 10",
+    "cinemark (the legacy), plano":           "Cinemark Legacy 24 + XD",
+    "cinemark (the legacy)":                  "Cinemark Legacy 24 + XD",
+    "cinemark allen 16 and xd, allen":        "Cinemark Allen 16 + XD",
+    "cinemark allen 16 and xd":               "Cinemark Allen 16 + XD",
+    "cinemark roanoke 14, roanoke":           "Cinemark Roanoke 14 + XD",
+    "cinemark roanoke 14":                    "Cinemark Roanoke 14 + XD",
+    "cinemark rockwall 14 and xd, rockwall":  "Cinemark Rockwall 14 + XD",
+    "cinemark rockwall 14 and xd":            "Cinemark Rockwall 14 + XD",
     # ── Brad Bills small-exhibitor city+state → actual venue name ─────────────
     "espanola, nm":      "dreamcatcher 10",
     "espanola nm":       "dreamcatcher 10",
@@ -2255,6 +2557,12 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "deer park 16":                           "cinemark century deer park 16",
     "deer park 16, deer park":                "cinemark century deer park 16",
     "valparaiso commons shopping center":     "cinemark at valparaiso 12",
+    "cinemark palace 20, boca raton":         "Cinemark Palace 20 + XD",
+    "cinemark palace 20":                     "Cinemark Palace 20 + XD",
+    "cinemark paradise 24, davie":            "Cinemark Paradise 24 + XD",
+    "cinemark paradise 24":                   "Cinemark Paradise 24 + XD",
+    "cinemark bluffton, bluffton":            "Cinemark Bluffton 12",
+    "cinemark bluffton":                      "Cinemark Bluffton 12",
     "cinemark seven bridges":                 "cinemark 7 bridges woodridge 16 imax",
     "cinemark seven bridges, woodridge":      "cinemark 7 bridges woodridge 16 imax",
     # ── Cinemark Taylor Reynolds circuit (THEATRE-header format) ────────────────
@@ -2267,6 +2575,290 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "sierra vista 10":                        "cinemark sierra vista 10",
     "cinemark spanish fork + xd, spanish fork": "cinemark spanish fork 8+xd",
     "cinemark spanish fork + xd":             "cinemark spanish fork 8+xd",
+    "henderson 12, henderson":                "Cinemark Cinedome 12 (Henderson)",
+    "henderson 12":                           "Cinemark Cinedome 12 (Henderson)",
+    "cinemark draper + xd, draper":           "Cinemark Draper 12 + XD",
+    "cinemark draper + xd":                   "Cinemark Draper 12 + XD",
+    "cinemark farmington + xd, farmington":   "Cinemark Farmington 14+ XD",
+    "cinemark farmington + xd":               "Cinemark Farmington 14+ XD",
+    "cinemark riverton + xd, riverton":       "Cinemark Riverton Ridgewood 14 +XD",
+    "cinemark riverton + xd":                 "Cinemark Riverton Ridgewood 14 +XD",
+    "century el con + xd, tucson":            "Cinemark Century 20 El Con and XD (Tucson)",
+    "century el con + xd":                    "Cinemark Century 20 El Con and XD (Tucson)",
+    "cinemark 12, american fork":             "Cinemark American Fork 12",
+    # Kaitlin Privitera (AMC KC/Midwest) — report short names differ from Mica names
+    "studio 28":               "amc studio olathe 30",
+    "independence 20":         "amc independence commons 20",
+    "prairiefire 17":          "amc dine-in prairie fire 17",
+    "legends 14":              "amc legends kansas city 14",
+    "northrock 14":            "amc northrock wichita 14",
+    "springfield 11":          "amc springfield 11",
+    # James Douglas (AMC SE/Florida) — report short names differ from Mica names
+    "regency 24":            "amc regency sq jacksonville 24",
+    "aventura mall 24":      "amc aventura 24",
+    "sunset place 24":       "amc sunset s miami 24",
+    "weston 8":              "amc weston cinema sunrise 8",
+    "bayou 15":              "amc bayou pensacola 15",
+    "avenue 16":             "amc avenue melbourne 16",
+    "tallahassee 20":        "amc tallahassee mall 20",
+    "veterans expressway 24":"amc veterans tampa 24",
+    "regency 20":            "amc regency sq brandon 20",
+    "woodlands square 20":   "amc woodland sq oldsmar 20",
+    "riverview 14":          "amc riverview gibsonton 14",
+    "westshore plaza 14":    "amc westshore tampa 14",
+    "sundial 12":            "amc sundial st petersburg",
+    "coral ridge 10":        "amc coral ridge ft lauderdale 10",
+    "pensacola 18":          "amc classic pensacola 18",
+    # Sergio Candelas (AMC Central/Southwest) — report short names differ from Mica names
+    "quail springs mall 24": "amc quail springs oklahoma city 24",
+    "town square 18":        "amc town square las vegas 18",
+    "decatur 10":            "amc classic decatur 10",
+    "springfield 12":        "amc classic springfield 12",
+    "springfield 8":         "amc springfield 8",
+    "esplanade 14":          "amc dine-in esplanade 14",
+    # Ron Wooley (AMC NE) — report short names differ from Mica names
+    "plainville 20":   "amc plainville cinema 20",
+    "palisades 21":    "amc palisades center 21",
+    "freehold 14":     "amc freehold metroplex 14",
+    "aviation 12":     "amc aviation linden 12",
+    "levittown 10":    "amc dine-in levittown 10",
+    "landmark 8":      "amc landmark 8",
+    # Dave Glass (AMC) — report short names differ from Mica names
+    "southlands 16":        "amc southlands aurora 16",
+    "flatiron crossing 14": "amc flatiron broomfield 14",
+    "orchard 12":           "amc orchard town center westminster 12",
+    "mayfair 18":           "amc mayfair mall wauwatosa 18",
+    "southdale center 16":  "amc southdale edina 16",
+    "southgate 9":          "amc dine-in southgate 9",
+    "southcenter 16":       "amc southcenter tukwila 16",
+    "factoria 8":           "amc factoria bellevue 8",
+    "alderwood 16":         "amc alderwood lynnwood 16",
+    # Kathryn Wintermyer (AMC Detroit/OH/PA) — report short names differ from Mica names
+    "forum 30":             "amc forum sterling heights 17",
+    "gratiot 15":           "amc star gratiot clinton township 15",
+    "john r 15":            "amc john r theatre 15",
+    "stonybrook 20":        "amc stonybrook louisville 20",
+    "309 cinema 9":         "amc 309 cinemas north wales 9",
+    "berkshire 8":          "amc berkshire wyomissing 8",
+    "marlton 8":            "amc marlton cinemas 8",
+    "westmoreland 15":      "amc westmoreland greensburg 15",
+    # David Saunders (Pacific NW / OR / WA indie circuit)
+    "bremerton":            "seefilm cinema",
+    "cinestars":            "hood river cinemas 5",
+    "coast":                "coast fort bragg 4",
+    "milwaukie":            "milwaukie portland 2",
+    "living room pdx":      "living room theatres portland",
+    "living room indy":     "living room theaters indianapolis",
+    "battle ground":        "battle ground cinema 8",
+    "canby":                "canby cinema 8",
+    "independence":         "independence cinema 8",
+    "oak grove":            "oak grove portland 8",
+    "roseburg":             "roseburg cinema",
+    "sandy":                "sandy cinema 8",
+    "scappoose":            "scappoose cinema 7",
+    # ── Small Indies / Diane Johnson circuit ──────────────────────────────────
+    "lamar, mo":            "plaza lamar 1",
+    "lamar mo":             "plaza lamar 1",
+    "borger, tx":           "morley borger 5",
+    "borger tx":            "morley borger 5",
+    "mountain grove, mo":   "fun city 5 cinemas",
+    "mountain grove mo":    "fun city 5 cinemas",
+    "mountain grove":       "fun city 5 cinemas",
+    "mt vernon 8":          "Mount Vernon 8",
+    "mesa grand 14":        "Mesa Grande 14",
+    "southern hill 12":     "Southern Hills 12",
+    "arrowhead town center 14": "Arrowhead 14",
+    "tulsa 12":             "Tulsa Hills 12",
+    "southroads 20":        "Southroads Tulsa 20",
+    "foothills 15":         "Foothills Tucson 15",
+    "surprise 14":          "Surprise Pointe 14",
+    # ── Regal / STM format aliases ────────────────────────────────────────────
+    # Brandon Corrier (Regal PA/NJ/NY circuit)
+    "hadley theatre stm 16":            "Regal Hadley Cinemas South Plainfield 16",
+    "washington township 14":           "Regal Washington Township Sewell 14",
+    "reg king of prussia 4dx & imax":   "Regal King Of Prussia 16",
+    # Mark Waring (Regal MD/VA/DC circuit)
+    "fox stm 16 & imax":                "Regal Fox Ashburn 16",
+    "kingstowne stm 16 & rpx":          "Regal Kingstowne Cinema 16",
+    "laurel towne centre 12":           "Regal Laurel Town Center 12",
+    "valley mall stm 16":               "Regal Valley Mall Hagerstown 16",
+    # Ashley Hensley (Regal Mountain West/CO/HI circuit)
+    "boise stm 22 & imax":              "Regal Edwards Boise 21 ScreenX, 4DX & IMAX",
+    # Alanna Peffley (Regal FL/VA/NC circuit)
+    "regal dania point 4dx rpx &vip":   "Regal Dania Pointe 16",
+    "regal dania point 4dx rpx & vip":  "Regal Dania Pointe 16",
+    "regal bistro at the falls":         "Regal Falls Miami 12",
+    "kendall vlg stm 16 imax & rpx":    "Regal Kendall Village Miami 16",
+    "pavilion stm 14 & rpx":            "Regal Pavilion Port Orange 14",
+    "champlain centre stm 8":           "Champlain Plattsburgh 8",
+    "e. greenbush 8":                   "East Greenbush 8",
+    "aviation mall 9":                  "Aviation Mall Queensbury 9",
+    "natomas mktplace stm 16 & rpx":    "Natomas Marketplace 16",
+    "stockton cty ctr stm 16 & imax":   "Stockton City Center 16",
+    "auburn stm 17":                    "Auburn Stadium 17",
+    "bridgeport stm 18 & imax":         "Bridgeport Tigard 18",
+    "cascade stm 16 imax & rpx":        "Cascade Vancouver 16",
+    "cinema 99 stm 11":                 "Cinema 99 Vancouver",
+    "city center stm 12":               "City Vancouver 12",
+    "movies on tv stm 16":              "Movies Hillsboro 16",
+    "santiam stm 11":                   "Santiam Salem 11",
+    "stark street stm 10":              "Stark Gresham 10",
+    # ── Celebration Cinema aliases ────────────────────────────────────────────
+    "cinema carousel 16":               "Celebration Cinema Carousel",
+    "crossroads 15 + imax":             "Celebration Crossroads Imax",
+    "rivertown 13 + c premium":         "Celebration Cinema Rivertown",
+    "grand rapids north 17 + imax":     "Celebration Cinema GR North",
+    "grand rapids south 15 + c premium":"Celebration South",
+    "lansing 19 + c premium xl":        "Celebration Lansing Imax",
+    "mt. pleasant 11":                  "Celebration Mt Pleasant",
+    "benton harbor 14 + dbox":          "Celebration Benton Harbor",
+    # ── Michael Eiff (Cinemark OH / IA circuit) ──────────────────────────────
+    "cinemark 14, strongsville":         "cinemark strongsville 14",
+    "cinemark 14, mansfield":            "cinemark mansfield 14",
+    "cinemark 12, zanesville":           "cinemark colony square mall",
+    "tinseltown usa + xd, north canton": "cinemark tinseltown n canton 24+ xd",
+    "movies 16, gahanna":                "cinemark stoneridge plaza movies 16",
+    "w. des moines jordan creek + xd":   "cinemark century 20 jordan creek and xd",
+    # ── Jennifer Solorzano (Cinemark CO / NM / TX West circuit) ─────────────
+    "cinemark 12, greeley":               "Cinemark Greeley 12",
+    "cinemark 16, fort collins":          "Cinemark Fort Collins 16",
+    "main place 6, mcallen":              "Cinemark Movies 6",
+    "main place 6":                       "Cinemark Movies 6",
+    "cinemark 16 + xd, brownsville":      "Cinemark Brownsville 16 + XD",
+    "cinemark 16 + xd, harlingen":        "Cinemark Harlingen 16 + XD",
+    "cinemark abilene and xd, abilene":   "Cinemark Abilene 12",
+    "cinemark abilene and xd":            "Cinemark Abilene 12",
+    # ── Andy Anderson (Cinemark SF Bay Area) ─────────────────────────────────
+    "century at hayward, hayward":        "Cinemark Century At Hayward 12",
+    "century at hayward":                 "Cinemark Century At Hayward 12",
+    # ── Beth Teal (Cinemark East / Midwest) ──────────────────────────────────
+    "cinemark towson + xd, towson":           "Cinemark Towson 15 + XD",
+    "cinemark towson + xd":                   "Cinemark Towson 15 + XD",
+    "cinemark 15 + xd, hadley":               "Cinemark Hadley 15 + XD",
+    "cinemark tinseltown + xd, louisville":   "Cinemark Tinseltown Louisville + XD",
+    "cinemark paducah, paducah":              "Cinemark Paducah 12",
+    "cinemark paducah":                       "Cinemark Paducah 12",
+    # ── Jennifer Hernandez (Cinemark SoCal — LA / Palm Springs) ─────────────
+    "cinemark 12 and xd, los angeles":        "Cinemark 12 Howard Hughes LA and XD",
+    "cinemark 16, palmdale":                  "Cinemark Antelope Valley Mall Palmdale 16",
+    "century la quinta + xd, la quinta":      "Cinemark Century La Quinta 12 + XD",
+    # ── Allie Fullmer (Cinemark TX — Houston / Austin / SA / Corpus) ─────────
+    "tinseltown 17 + xd, the woodlands":      "Cinemark The Woodlands 17 + XD",
+    "cinemark 18 + xd, webster":              "Cinemark Webster 18 + XD",
+    "hollywood usa 20, pasadena":             "Cinemark Hollywood Pasadena 20",
+    "cinemark 19 + xd, katy":                 "Cinemark Katy 19 + XD",
+    "cinemark 12 + xd, pearland":             "Cinemark Pearland 12 + XD",
+    "cinemark 12 + xd, cypress":              "Cinemark Cypress 12 + XD",
+    "cut! by cinemark cypress, cypress":      "Cinemark Cut 8!",
+    "cut! by cinemark cypress":               "Cinemark Cut 8!",
+    "cinemark 12, rosenberg":                 "Cinemark Rosenberg 12",
+    "cinemark 12, victoria":                  "Cinemark Victoria 12",
+    "century 16 + imax, corpus christi":      "Cinemark Century Corpus Christi 16 + XD and IMAX",
+    "college station + xd, college station":  "Cinemark College Station 18 + XD",
+    "stone hill town center, pflugerville":   "Cinemark Stone Hill Town Ctr Pflugerville 9 *TEMP 5*",
+    "stone hill town center":                 "Cinemark Stone Hill Town Ctr Pflugerville 9 *TEMP 5*",
+    "cinemark 14, round rock":                "Cinemark Round Rock 14",
+    "southpark meadows 14, austin":           "Cinemark Southpark Mall Austin 14",
+    "southpark meadows 14":                   "Cinemark Southpark Mall Austin 14",
+    "movies 8, del rio":                      "Cinemark Movies Del Rio 8",
+    "cinemark 7, eagle pass":                 "Cinemark Eagle Pass 7",
+    # ── Tammy Flores / Hooky Entertainment ───────────────────────────────────
+    "hooky entertainment + sdx + imax, hutto": "Hooky Entertainment + SDX + IMAX Hutto 8",
+    "hooky entertainment + sdx + imax":        "Hooky Entertainment + SDX + IMAX Hutto 8",
+    "redstone 14 cinemas w/pdx":               "Red Stone 14 Cinemas",
+    "redstone 14 cinemas":                     "Red Stone 14 Cinemas",
+    # ── Tom McCauley (AMC New England / Mid-Atlantic) ─────────────────────────
+    "methuen 20":               "AMC Methuen at the Loop 20",
+    "hampton 24":               "AMC Hampton Towne Centre 24",
+    "loudoun 11":               "AMC Loudoun Station Ashburn 11",
+    "worldgate 9":              "AMC Worldgate Herndon 9",
+    "columbia mall 14":         "AMC Columbia Maryland 14",
+    "mj capital center 12":     "AMC Magic Johnson Capital Center 12",
+    "st charles towne center 9":"AMC St. Charles Waldorf 9",
+    "academy 8":                "AMC Academy Greenbelt 8",
+    # ── Justin Johnson (AMC Chicago / Midwest / Indiana) ─────────────────────
+    "yorktown 18":              "AMC Yorktown Lombard 18",
+    "galewood 14":              "AMC Galewood Crossings 14",
+    "hawthorn 12":              "AMC Hawthorn Vernon Hills 12",
+    "randhurst 12":             "AMC Randhurst Mount Prospect 12",
+    "peru 8":                   "AMC Peru Mall 8",
+    "castleton square 14":      "AMC Castleton Indianapolis 14",
+    "washington sq 12":         "AMC Washington Square 12",
+    # ── Dan Cammarata (AMC Texas / SE) ───────────────────────────────────────
+    "northpark 15":             "AMC North Park Dallas 15 & IMAX",
+    "lakeline 9":               "AMC Lakeline Mall Cedar Park 9",
+    "fountains 18":             "AMC Fountains Stafford 18 & IMAX",
+    "rivercenter 11":           "AMC Rivercenter San Antonio 9",
+    "sikes 10":                 "AMC Sikes Senter 10",
+    "corpus 16":                "AMC Corpus Christi 16",
+    "stonebriar mall 24":       "AMC Stonebriar Frisco 24 & IMAX",
+    "firewheel town center 18": "AMC Firewheel Garland 18",
+    "eastchase 9":              "AMC Eastchase Ft Worth 9",
+    "willowbrook 24":           "AMC Willowbrook Houston 24",
+    "brazos 14":                "AMC Brazos Stadium Lake Jackson 14",
+    # ── Devan Tolbert (AMC SE / Louisiana / Carolinas) ───────────────────────
+    "hanes 12":                 "AMC Hanes Winston Salem 12",
+    # ── Brandon Ferguson (AMC LA / San Diego / Sacramento / SF Bay Area) ──────
+    "orange 30":                "AMC Block Orange 30 & IMAX",
+    "tyler 16":                 "AMC Tyler Riverside 16 & IMAX",
+    "mercado 20":               "AMC Mercado Santa Clara 20 & IMAX",
+    "metreon 16":               "AMC Metreon San Francisco 16 & IMAX",
+    "eastridge 15":             "AMC Eastridge Mall San Jose 15 & IMAX",
+    "saratoga 14":              "AMC Saratoga San Jose 14 & IMAX",
+    # ── Kelsey Kash (AMC AL / TN / Chattanooga / Knoxville / Tri-Cities) ──────
+    "dothan pavilion 12":       "AMC CLASSIC Dothan Pavillion 12",
+    "vestavia 10":              "AMC DINE-IN Vestavia Hills 10",
+    "battlefield 10":           "AMC CLASSIC Battlefield Ft Oglethorpe 10",
+    "thoroughbred 20":          "AMC Thoroughbred Franklin 20 & IMAX",
+    "stones river 9":           "AMC Stone River 9",
+    # ── Blue Smiley / CFB Epic + GTC (Rentrak-grid fallback) ─────────────────
+    "regency square 8":         "Epic Regency Cinema Stuart 8",
+    "riverwatch":               "GTC Riverwatch Cinemas 12",
+    "gateway 7":                "GTC Gateway 7",
+    "island 7":                 "GTC Island 7",
+    "smithfield cinemas 10":    "GTC Smithfield 10",
+    "valdosta stadium 15 w/gtx":"GTC Valdosta 15",
+    "pooler stadium 14 w/gtx":  "GTC Pooler 14",
+    "mall 7":                   "GTC Mall Cinemas 7",
+    "evans 14":                 "GTC Evans 14",
+    "liberty 9":                "GTC Liberty 9",
+    "mountain cinemas 8":       "GTC Mountain Cinemas 8",
+    "university 16 cinemas w/gtx":"GTC University 16",
+    "moultrie stadium 6 cinemas":"GTC Moultrie 6",
+    "danville stadium 12":      "GTC Danville 12",
+    # ── Cinemark Pacific NW (Josh Wymer) ─────────────────────────────────────
+    "lincoln square cinema with imax":    "cinemark lincoln square cinemas imax 16",
+    "lincoln square cinema bistro 6":     "cinemark reserve lincoln square dine-in 6",
+    "cinemark totem lake + xd":           "cinemark village at totem lake 8",
+    "century walla walla grand cinema 12":"cinemark walla walla grand cinema12",
+    "century arden and xd, sacramento":   "Cinemark Century Arden + XD 14",
+    "century arden and xd":               "Cinemark Century Arden + XD 14",
+    "century marina + xd, marina":        "Cinemark Century Marina + XD 5",
+    "century marina + xd":                "Cinemark Century Marina + XD 5",
+    "cinemark 17, springfield":           "Cinemark Springfield 17",
+    # ── Watson / Imagine Cinemas / CineStarz Canada ───────────────────────────
+    "waikoloa 3":               "waikoloa village cinema 3",
+    "promenade mall":           "imagine cinemas promenade 6",
+    "london":                   "imagine cinemas london",
+    "lakeshore windsor":        "imagine cinemas lakeshore",
+    "alliston":                 "imagine cinemas alliston",
+    "cote des nieges":          "cine starz cote-des-neiges 7",
+    "cote-des-nieges":          "cine starz cote-des-neiges 7",
+    "deluxe taschereau":        "cine starz taschereau 12",
+    "deluxe longueuil":         "cinestarz longueuil 14",
+    "burlington":               "cine starz burlington",
+    "st. laurent":              "cine starz st laurent centre",
+    "st laurent":               "cine starz st laurent centre",
+    # ── Culbertson / IBS Indiana ─────────────────────────────────────────────
+    "goshen":                   "linway plaza goshen 14",
+    "jerseyville":              "the stadium theater 3",
+    "litchfield":               "westside litchfield 3",
+    "rensselaer":               "fountain stone theaters rensselaer 5",
+    "nappanee theatre":         "nappanee theatre 1",
+    "goshen, in":               "linway plaza goshen 14",
+    "jerseyville, il":          "the stadium theater 3",
+    "litchfield, il":           "westside litchfield 3",
+    "rensselaer, in":           "fountain stone theaters rensselaer 5",
 }
 
 
@@ -2341,11 +2933,16 @@ _FIND_ONE_JS = """
 
 def _set_screening_type_per_row(page, entries: list[dict], screening_type: str, contact: str = "") -> int:
     """
-    Set screening type by clicking the per-row screening type link (e.g. "Clean"),
-    which opens the "Edit Screenings" modal with a dropdown + Save button.
-    entries: list of {theatre, film} dicts — film is used as a tiebreaker when the
-    same theatre has rows for two different films.
+    Set screening type for specific rows using checkbox selection + Bulk Change.
+    Checks the checkbox on each matching row, then applies Bulk Change → Screening Types.
     """
+    # Clear any existing row selections before starting
+    page.evaluate("""() => {
+        document.querySelectorAll('table tbody tr input[type="checkbox"]:checked')
+            .forEach(cb => cb.click());
+    }""")
+    page.wait_for_timeout(200)
+
     count = 0
     seen: set[tuple] = set()
 
@@ -2353,16 +2950,10 @@ def _set_screening_type_per_row(page, entries: list[dict], screening_type: str, 
         name = entry["theatre"] if isinstance(entry, dict) else entry
         film = entry.get("film", "") if isinstance(entry, dict) else ""
         city = entry.get("city", "") if isinstance(entry, dict) else ""
-        key  = (name, film, city)  # include city so same-name theatres in diff cities aren't deduped
+        key  = (name, film, city)
         if key in seen:
             continue
         seen.add(key)
-
-        _ensure_holdovers_page(page, contact)
-
-        # Dismiss any lingering Numero/error dialog before clicking (it would
-        # satisfy the wait_for_selector('[role="dialog"]') check below prematurely)
-        _dismiss_any_dialog(page)
 
         lookup_name = _apply_city_alias(name, city)
         info = page.evaluate(_FIND_ONE_JS, {"name": lookup_name, "film": film})
@@ -2371,108 +2962,38 @@ def _set_screening_type_per_row(page, entries: list[dict], screening_type: str, 
             label = f"'{name}'" + (f" / '{film}'" if film else "")
             log(f"    NO MATCH  {label} ({info.get('reason', '')})")
             continue
-        alias_note = f" [alias→{lookup_name}]" if lookup_name != name else ""
+        alias_note = f" [alias->{lookup_name}]" if lookup_name != name else ""
         label = f"'{name}'{alias_note}" + (f" / '{film}'" if film else "")
-        log(f"    MATCH  {label} → row {idx} — {info.get('rowText','')[:60]}")
+        log(f"    MATCH  {label} -> row {idx} -- {info.get('rowText','')[:60]}")
 
-        row = page.locator("table tbody tr").nth(idx)
-        try:
-            row.scroll_into_view_if_needed(timeout=3_000)
-            page.wait_for_timeout(300)
-        except Exception:
-            pass
-
-        # Click the screening type link (e.g. "Clean", "Alternating") in the row
-        st_link = row.locator(
-            'a:has-text("Clean"), a:has-text("Alternating"), '
-            'a:has-text("Single Matinee"), a:has-text("Multiple Matinees"), '
-            'a:has-text("Prime"), a:has-text("Late")'
-        ).first
-        if st_link.count() == 0:
-            st_link = row.locator(
-                'button:has-text("Clean"), span:has-text("Clean"), '
-                'button:has-text("Alternating"), span:has-text("Alternating"), '
-                'button:has-text("Single Matinee"), button:has-text("Multiple Matinees"), '
-                'button:has-text("Prime"), button:has-text("Late")'
-            ).first
-        if st_link.count() == 0:
-            log(f"    WARNING: Screening type link not found for '{name}' — skipping")
-            continue
-
-        _dismiss_any_dialog(page)  # clear any toast that appeared after page nav
-        try:
-            st_link.click(force=True, timeout=5_000)
-        except Exception as _st_e:
-            log(f"    WARNING: Screening type link click failed for '{name}': {_st_e}")
-            continue
-        page.wait_for_timeout(400)
-
-        # Wait specifically for the "Edit Screenings" modal — NOT any dialog.
-        # A leftover Numero error dialog would otherwise satisfy [role="dialog"]
-        # before the correct modal has opened.
-        try:
-            page.wait_for_selector(
-                '[role="dialog"]:has-text("Edit Screenings")',
-                timeout=5_000,
-            )
-        except PlaywrightTimeout:
-            log(f"    WARNING: Edit Screenings modal did not open for '{name}'")
-            page.keyboard.press("Escape")
-            continue
-        page.wait_for_timeout(400)
-
-        # Select the desired screening type from the dropdown
-        selected = False
-        dropdown = page.locator('[role="dialog"] ng-select, [role="dialog"] select').first
-        if dropdown.count() > 0:
-            dropdown.click()
-            page.wait_for_timeout(500)
-            opt = page.locator(
-                f'.ng-option:has-text("{screening_type}"), '
-                f'[role="option"]:has-text("{screening_type}"), '
-                f'option:has-text("{screening_type}")'
-            ).first
-            if opt.count() > 0:
-                opt.click()
-                page.wait_for_timeout(400)
-                selected = True
-            else:
-                log(f"    WARNING: Option '{screening_type}' not found in dropdown")
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(300)
-                continue
-        else:
-            log(f"    WARNING: No dropdown found in Edit Screenings modal")
-
-        if not selected:
-            cancel_btn = page.locator('[role="dialog"] button:has-text("Cancel")').first
-            if cancel_btn.count() > 0:
-                cancel_btn.click()
-            continue
-
-        # Click Save
-        save_btn = page.locator('[role="dialog"] button:has-text("Save")').first
-        if save_btn.count() == 0:
-            save_btn = page.locator('button:has-text("Save")').first
-        if save_btn.count() > 0:
-            save_btn.click()
-            # Wait for the Edit Screenings modal to fully close before continuing.
-            # Without this, _dismiss_any_dialog on the next iteration would find
-            # this still-open modal and close it, causing a visible "double open".
-            try:
-                page.wait_for_selector(
-                    '[role="dialog"]:has-text("Edit Screenings")',
-                    state="hidden",
-                    timeout=4_000,
-                )
-            except PlaywrightTimeout:
-                pass
-            page.wait_for_timeout(300)
-            log(f"    Screening type -> {screening_type}  OK")
+        # Check the checkbox for this row via JS
+        checked = page.evaluate("""
+            (idx) => {
+                const rows = document.querySelectorAll('table tbody tr');
+                if (idx >= rows.length) return false;
+                const cb = rows[idx].querySelector('input[type="checkbox"]');
+                if (!cb) return false;
+                if (!cb.checked) cb.click();
+                return true;
+            }
+        """, idx)
+        if checked:
             count += 1
         else:
-            log(f"    WARNING: Save button not found for '{name}'")
-            page.keyboard.press("Escape")
+            log(f"    WARNING: Checkbox not found for '{name}'")
+
+    if count == 0:
+        return 0
+
+    # Apply Bulk Change → Screening Types for all checked rows
+    log(f"  Applying Bulk Change → {screening_type} for {count} checked rows ...")
+    _bulk_set_screening_type(page, screening_type, contact="")
+
+    # Uncheck all rows after bulk change
+    page.evaluate("""() => {
+        document.querySelectorAll('table tbody tr input[type="checkbox"]:checked')
+            .forEach(cb => cb.click());
+    }""")
 
     return count
 
@@ -2508,9 +3029,9 @@ def _set_status_per_row(page, entries: list[dict], status: str, contact: str = "
             label = f"'{name}'" + (f" / '{film}'" if film else "")
             log(f"    NO MATCH  {label} ({info.get('reason', '')})")
             continue
-        alias_note = f" [alias→{lookup_name}]" if lookup_name != name else ""
+        alias_note = f" [alias->{lookup_name}]" if lookup_name != name else ""
         label = f"'{name}'{alias_note}" + (f" / '{film}'" if film else "")
-        log(f"    MATCH  {label} → row {idx} — {info.get('rowText','')[:60]}")
+        log(f"    MATCH  {label} -> row {idx} -- {info.get('rowText','')[:60]}")
 
         row = page.locator("table tbody tr").nth(idx)
         try:

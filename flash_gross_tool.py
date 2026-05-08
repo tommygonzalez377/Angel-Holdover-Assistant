@@ -793,6 +793,45 @@ def load_final_locations(csv_path: str) -> list[dict]:
             if _ln.strip() == target:
                 raw = "".join(lines_all[_li:])
                 break
+    # Holdover grid format (David Saunders / indie circuits) — not in ComScore.
+    # Parse theatre names from the grid and render a dashboard with placeholder entries.
+    if 'preliminary hold overs' in raw.lower():
+        print("INFO: Indie holdover grid detected — building placeholder dashboard.", flush=True)
+        _SKIP_HG = {'theatre', 'theater', 'theatres', 'theaters', 'film', 'title', 'attraction'}
+        _hg_entries: list[dict] = []
+        for _hl in raw.splitlines():
+            _hc = _hl.split('\t')
+            if len(_hc) < 3:
+                continue
+            _th = _hc[0].strip()
+            _fm = _hc[1].strip() if len(_hc) > 1 else ''
+            if not _th or not _fm:
+                continue
+            if _th.lower() in _SKIP_HG or _fm.lower() in _SKIP_HG:
+                continue
+            _undecided = _hc[10].strip().lower() if len(_hc) > 10 else ''
+            if _undecided == 'x':
+                _action = 'Undecided'
+            elif _hc[2].strip().lower() == 'x':
+                _action = 'Hold'
+            elif any(_hc[i].strip().lower() == 'x' for i in range(3, min(10, len(_hc)))):
+                _action = 'Final'
+            else:
+                continue
+            _hg_entries.append({
+                'unit': '', 'theatre': _th, 'ml_venue': _th, 'city': '', 'attraction': _fm,
+                'booking_action': _action, 'buyer': '', 'br': '',
+                'rentrak_id': None, 'url': None, 'films': [], 'valid_as_of': '',
+                'status': 'no_rentrak_id',
+                'error': 'Not in Comscore — indie/arthouse circuit',
+            })
+        if _hg_entries:
+            _wk = str(most_recent_friday())
+            _out = OUTPUT_DIR / "flash_gross_dashboard.html"
+            render_dashboard(_hg_entries, _wk, _out)
+            print(f"  {len(_hg_entries)} theatres listed (Hold/Final/Undecided).", flush=True)
+        sys.exit(0)
+
     # Save raw BEFORE preamble stripping — AMC preamble contains the format marker
     # ('AMC Film Programmer') which gets stripped before df parsing begins.
     _raw_pre_strip = raw
@@ -997,9 +1036,13 @@ def load_final_locations(csv_path: str) -> list[dict]:
     # Use _raw_pre_strip for detection — preamble stripper above removes 'AMC Film Programmer'.
     # Use raw (stripped) for parsing — data rows with Opening anchors are still present.
     _amc_opening_pat = re.compile(r'\b\d+\s+Opening\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4}')
+    _amc_split_pat   = re.compile(r'Split\s+[Ss]creen\.\s+(?:Final|Holdover)', re.I)
+    _amc_anchor_pat  = re.compile(r'\b[\d,]+[ ]+(?:Split[ ]+[Ss]creen\.[ ]+)?(?:Final|Holdover)\b')
     if df is None and (
         'AMC Film Programmer' in _raw_pre_strip
         or _amc_opening_pat.search(_raw_pre_strip)
+        or _amc_split_pat.search(_raw_pre_strip)
+        or _amc_anchor_pat.search(_raw_pre_strip)
     ):
         import re as _re_amc
         _DMA_RE_amc = _re_amc.compile(
@@ -1074,11 +1117,11 @@ def load_final_locations(csv_path: str) -> list[dict]:
         mask = (action_vals.str.upper().str.contains(r'FINAL|HOLD', na=False)
                 | (action_vals == ""))
     else:
-        mask = action_vals.str.upper().str.contains(r'FINAL|HOLD', na=False)
+        mask = action_vals.str.upper().str.contains(r'FINAL', na=False)
     finals = df[mask].copy()
 
     if finals.empty:
-        print("No FINAL/HOLD locations found.")
+        print("No FINAL locations found.")
         return []
 
     unit_col    = col.get("unit")

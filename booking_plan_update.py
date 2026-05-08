@@ -87,10 +87,12 @@ def _parse_one_per_line(raw: str) -> list[dict]:
     and bare Cinemark format (where email clients strip the __ underscores).
     """
     _CINEMARK_BARE = {'DMA', 'SALES', '#', 'THEATRE', 'THEATER', 'SCR', 'SCREENS',
-                      'CHAIN', 'CIRCUIT', 'BRCH', 'BRANCH'}
+                      'CHAIN', 'CIRCUIT', 'BRCH', 'BRANCH', 'BOOK', 'PRINTS'}
     _NAME_MAP = {'SALES': 'buyer', 'THEATRE': 'theatre', 'THEATER': 'theatre',
                  'SCR': 'screens', '#': 'unit', 'DMA': 'dma', 'BRCH': 'branch',
-                 'BRANCH': 'branch', 'SCREENS': 'screens'}
+                 'BRANCH': 'branch', 'SCREENS': 'screens',
+                 'BOOK': 'action',    # Michael Eiff / Cinemark single-film format
+                 'PRINTS': 'action'}  # Andy Anderson SF Bay Area format
 
     # Parse preserving space-only lines as empty cell values.
     # Blank separator lines (truly empty after strip) are skipped.
@@ -436,7 +438,8 @@ _BP_SCREENING_PHRASES: list[tuple[str, str]] = [
     ("1 mat",       "Single Matinee"),
     ("mats",        "Multiple Matinees"),
     ("em",          "Multiple Matinees"),
-    ("lm",          "Late"),
+    ("lm",          "Multiple Matinees"),
+    ("matinee shows","Alternating"),
     ("mat",         "Single Matinee"),
     ("prime",       "Prime"),
     ("split",       "Alternating"),
@@ -482,8 +485,8 @@ def _is_screening_phrase(action: str) -> bool:
 def _is_active_action(action: str) -> bool:
     """
     Return True if the booking row should be treated as active/open.
-    Accepts: blank (Cinemark format), "Open ...", "Final" (Cinemark confirmed),
-             or any known screening type phrase (e.g. "Clean", "MATS+EE").
+    Accepts: blank (Cinemark format), "Open ...", "Hold", "Final", "Confirm",
+             "Tentative", or any known screening type phrase (e.g. "Clean", "MATS+EE").
     Rejects: Cancelled, Declined, etc.
     """
     al = action.strip().lower()
@@ -492,6 +495,10 @@ def _is_active_action(action: str) -> bool:
     if "open" in al:
         return True
     if "final" in al:
+        return True
+    if "hold" in al:
+        return True
+    if "buyout" in al:
         return True
     if "confirm" in al:
         return True
@@ -655,7 +662,7 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
     Returns { film_title: [{"theatre": str, "date": "MM/DD"}, ...] }
     """
     header_sample = '\n'.join(text.splitlines()[:15])
-    _amc_opening_pat = re.compile(r'\b\d+\s+(?:Split\s+screen\.\s+)?(?:Opening\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4}|Holdover)\b')
+    _amc_opening_pat = re.compile(r'\b\d+\s+(?:Split\s+[Ss]creen\.\s+)?(?:Opening\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4}|Final(?:\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4})?|Holdover)\b')
     is_amc = (
         'AMC Film Programmer' in header_sample
         or ('Theatre Name' in header_sample and 'Change Type' in header_sample)
@@ -690,7 +697,7 @@ def _parse_amc_booking(text: str) -> dict[str, list[dict]]:
 
         # Anchor: gross + Opening (with date) OR Holdover (date from film week header)
         m = re.search(
-            r'\b[\d,]+\s+(?:Split\s+screen\.\s+)?(?:Opening\s*[-–]\s*(\d{1,2}/\d{1,2}/\d{4})|Holdover)\b',
+            r'\b[\d,]+\s+(?:Split\s+[Ss]creen\.\s+)?(?:Opening\s*[-–]\s*(\d{1,2}/\d{1,2}/\d{4})|Final(?:\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4})?|Holdover)\b',
             line)
         if not m:
             continue
@@ -833,7 +840,11 @@ def _parse_glen_parham_booking(text: str) -> dict[str, list[dict]]:
         _cells = [c.strip() for c in _dl.split('\t')]
         def _gc(i): return _cells[i] if 0 <= i < len(_cells) else ""
         _stat = _gc(_ci_stat).lower()
-        if not _stat.startswith('new'):
+        # Accept: new openings, holdovers (hold/hold * alt/hold *** alt), finals
+        _is_new   = _stat.startswith('new')
+        _is_hold  = _stat.startswith('hold')
+        _is_final = _stat.startswith('final')
+        if not (_is_new or _is_hold or _is_final):
             continue
         _thtr = _gc(_ci_thtr)
         _city = _gc(_ci_city)
@@ -842,6 +853,7 @@ def _parse_glen_parham_booking(text: str) -> dict[str, list[dict]]:
         _playwk = _gc(_ci_playwk)  # "MM/DD/YYYY" → extract "MM/DD"
         if not _thtr or not _film:
             continue
+        _phrase = "" if _is_new else ("final" if _is_final else "hold")
         _date_m = re.match(r'(\d{1,2}/\d{1,2})', _playwk)
         _date = _date_m.group(1) if _date_m else None
         _city_key = _GP_CITY_CORRECTIONS.get(_city.lower(), _city.lower())
@@ -849,12 +861,74 @@ def _parse_glen_parham_booking(text: str) -> dict[str, list[dict]]:
         _matched = _gp_fuzzy_match(_thtr, _cands) if _cands else ''
         _venue = _matched or _thtr
         if not _matched:
-            log(f"  [glen-parham-open] no master match for '{_thtr}' ({_city}, {_st.upper()}) — using raw name")
-        results.setdefault(_film, []).append({"theatre": _venue, "date": _date})
+            log(f"  [glen-parham] no master match for '{_thtr}' ({_city}, {_st.upper()}) — using raw name")
+        results.setdefault(_film, []).append({"theatre": _venue, "date": _date, "phrase": _phrase})
     if results:
         for film, rows in results.items():
             log(f"  [glen-parham-open] Film: '{film}', {len(rows)} theatre(s): "
                 f"{[r['theatre'] for r in rows]}")
+    return results
+
+
+_RENTRAK_VENUE_LOOKUP: dict[str, str] = {}
+
+def _load_rentrak_venue_lookup() -> dict[str, str]:
+    global _RENTRAK_VENUE_LOOKUP
+    if _RENTRAK_VENUE_LOOKUP:
+        return _RENTRAK_VENUE_LOOKUP
+    master_path = Path(__file__).parent / "master_list_cache.csv"
+    if not master_path.exists():
+        return _RENTRAK_VENUE_LOOKUP
+    with open(master_path, newline="", encoding="utf-8-sig") as _f:
+        for _row in csv.DictReader(_f):
+            _rid = _row.get("Venue Rentrak ID", "").strip()
+            _vn  = _row.get("Venue", "").strip()
+            if _rid and _vn:
+                _RENTRAK_VENUE_LOOKUP[_rid] = _vn
+    log(f"  [rentrak-lookup] loaded {len(_RENTRAK_VENUE_LOOKUP)} Rentrak ID → venue mappings")
+    return _RENTRAK_VENUE_LOOKUP
+
+
+def _parse_blue_smiley_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse Blue Smiley / CFB Rentrak-grid booking format.
+    Tab-delimited: Rentrak ID | CIRCUIT | THEATRE | CITY | ST | TITLE | Studio | Playwk | PLAYDATE | COMMENTS
+    Uses Rentrak ID → Mica venue name for reliable matching (avoids fuzzy failures for
+    Epic/GTC venues whose booking names diverge from Mica names).
+    All rows treated as openings; date from Playwk column (MM/DD).
+    """
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines or '\t' not in lines[0]:
+        return {}
+    hdrs = [h.strip().lower() for h in lines[0].split('\t')]
+    if 'rentrak id' not in hdrs or 'theatre' not in hdrs or 'title' not in hdrs:
+        return {}
+
+    i_rid    = hdrs.index('rentrak id')
+    i_thtr   = hdrs.index('theatre')
+    i_film   = hdrs.index('title')
+    i_playwk = hdrs.index('playwk') if 'playwk' in hdrs else -1
+
+    lkp = _load_rentrak_venue_lookup()
+    results: dict[str, list[dict]] = {}
+    for line in lines[1:]:
+        cells = [c.strip() for c in line.split('\t')]
+        def _g(i): return cells[i] if 0 <= i < len(cells) else ""
+        rid  = _g(i_rid)
+        thtr = _g(i_thtr)
+        film = _g(i_film)
+        pw   = _g(i_playwk)
+        if not thtr or not film:
+            continue
+        venue = lkp.get(rid) or thtr
+        _dm   = re.match(r'(\d{1,2}/\d{1,2})', pw)
+        date  = _dm.group(1) if _dm else None
+        results.setdefault(film, []).append({"theatre": venue, "date": date, "phrase": ""})
+
+    if not results:
+        return {}
+    log(f"  [blue-smiley] Detected Rentrak-grid booking format — "
+        f"{sum(len(v) for v in results.values())} venue(s) across {len(results)} film(s)")
     return results
 
 
@@ -914,6 +988,109 @@ def _parse_diane_johnson_booking(text: str) -> dict[str, list[dict]]:
             log(f"  [diane-j-open] Film: '{film}', {len(rows)} theatre(s): "
                 f"{[r['theatre'] for r in rows]}")
     return results
+
+
+def _watson_showtime_label(showtime: str) -> str:
+    """Map Watson/Imagine/Cinestarz Showtime column values to Mica screening type labels."""
+    s = showtime.lower().strip()
+    if not s or 'full' in s:
+        return ""
+    # "2nd mat / eves", "1st mat / 1st eve", "mats & 7pm" → Alternating
+    if 'eve' in s or ('mat' in s and re.search(r'\d|&|/', s)):
+        return "Alternating"
+    if 'mats' in s:
+        return "Multiple Matinees"
+    if 'mat' in s:
+        return "Single Matinee"
+    return _bp_screening_label(showtime)
+
+
+def _parse_watson_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse Richard/Cathy Watson (Imagine/Cinestarz Canada) booking format.
+    Tab-delimited:
+      Booking Week | Group | Theatre Name | Title | Language | Showtime | O/H | Dist.
+    """
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines or '\t' not in lines[0]:
+        return {}
+    hdrs = [h.lower().strip() for h in lines[0].split('\t')]
+    if 'booking week' not in hdrs or 'theatre name' not in hdrs or 'o/h' not in hdrs:
+        return {}
+
+    i_theatre  = hdrs.index('theatre name')
+    i_title    = hdrs.index('title')    if 'title'    in hdrs else -1
+    i_showtime = hdrs.index('showtime') if 'showtime' in hdrs else -1
+    i_oh       = hdrs.index('o/h')
+
+    results: dict[str, list[dict]] = {}
+    for line in lines[1:]:
+        cells    = [c.strip() for c in line.split('\t')]
+        def _g(i): return cells[i] if 0 <= i < len(cells) else ""
+        theatre  = _g(i_theatre)
+        raw_film = _g(i_title) if i_title >= 0 else ""
+        status   = _g(i_oh).lower()
+        showtime = _g(i_showtime) if i_showtime >= 0 else ""
+        if not theatre or not status or status == 'o/h':
+            continue
+        film   = _FRENCH_TITLES.get(raw_film.lower().strip(), raw_film.strip()) or "Unknown"
+        phrase = _watson_showtime_label(showtime)
+        results.setdefault(film, []).append({"theatre": theatre, "date": None, "phrase": phrase})
+
+    if not results:
+        return {}
+    log(f"  [watson-format] Detected Watson/Imagine/Cinestarz format — "
+        f"{sum(len(v) for v in results.values())} venue(s) across {len(results)} film(s)")
+    return results
+
+
+def _parse_ibs_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse IBS (Indiana Booking Service / Culbertson) email booking format.
+    Venues listed comma-separated before 'opening FILM TITLE' on the same line.
+    Example:
+        Re-confirming Corydon, Goshen, Jerseyville, Litchfield, Rensselaer opening Animal Farm.
+        ADDITIONAL 5/1 NEW OPENING LOCATION - 1 week, please Nappanee Theatre, Nappanee, IN
+    """
+    # Capture the comma-separated venue list AND film title in two groups.
+    # Venue names are capitalized single words (no hyphens/commas in venue names).
+    # Require ≥1 comma in the venue list to distinguish from normal prose.
+    m = re.search(
+        r'([A-Z][A-Za-z0-9 ]+(?:,\s*[A-Za-z0-9 ]+)+(?:,?\s+and\s+[A-Z][A-Za-z0-9 ]+)?)'
+        r'\s+opening\s+([A-Z][A-Za-z0-9 \'\-&\.]+?)(?:\.|,|\n|$)',
+        text,
+    )
+    if not m:
+        return {}
+
+    venue_list_raw = m.group(1).strip()
+    film           = m.group(2).strip()
+
+    # Strip leading action verb ("Re-confirming", "Confirming", etc.)
+    venue_list = re.sub(r'^(?:Re-?confirming|Confirming|Holding)\s+', '', venue_list_raw, flags=re.I)
+
+    # Split on commas (with optional "and") and " and "
+    raw_names   = re.split(r',\s*(?:and\s+)?|\s+and\s+', venue_list)
+    venue_names = [v.strip().strip('.,') for v in raw_names if v.strip() and len(v.strip()) > 2]
+
+    # Remove explicitly cancelled venues ("cancel Warsaw" → drop "Warsaw")
+    for cancel_m in re.finditer(r'\bcancel\s+([A-Z][a-zA-Z\s]+?)(?:[.\-\n,]|$)', text):
+        cancelled = cancel_m.group(1).strip().lower()
+        venue_names = [v for v in venue_names if v.lower() != cancelled]
+
+    # Pick up "please VENUE Theatre/Theater, City, ST" extra location lines
+    for add_m in re.finditer(
+        r'\bplease\s+((?:[A-Z][A-Za-z0-9]+ ){1,4}(?:Theatre|Theater|Cinemas|Cinema)),',
+        text,
+    ):
+        extra = add_m.group(1).strip()
+        if not any(v.lower() == extra.lower() for v in venue_names):
+            venue_names.append(extra)
+
+    if not venue_names:
+        return {}
+    log(f"  [ibs-format] Film: '{film}', {len(venue_names)} theatre(s): {venue_names}")
+    return {film: [{"theatre": v, "date": None} for v in venue_names]}
 
 
 _UNIT_NUM_RE = re.compile(r'^\d+\s*[-–]\s*', re.UNICODE)
@@ -988,9 +1165,153 @@ def _parse_cineplex_policy_booking(text: str) -> dict[str, list[dict]]:
     if not results:
         return {}
 
+    # Deduplicate same theatre appearing multiple times (e.g. bilingual EN+FR rows).
+    # Keep the entry with the "stronger" screening type.
+    _SCREENING_RANK = {"Alternating": 4, "Multiple Matinees": 3, "Single Matinee": 2, "Prime": 1, "": 0}
+    for film, entries in results.items():
+        seen: dict[str, dict] = {}
+        for entry in entries:
+            key = entry["theatre"].lower()
+            if key not in seen:
+                seen[key] = entry
+            else:
+                cur_rank  = _SCREENING_RANK.get(_bp_screening_label(seen[key]["phrase"]), 0)
+                new_rank  = _SCREENING_RANK.get(_bp_screening_label(entry["phrase"]), 0)
+                if new_rank > cur_rank:
+                    seen[key] = entry
+        results[film] = list(seen.values())
+
     log(f"  [cineplex-policy] Detected Cineplex policy format — "
         f"{sum(len(v) for v in results.values())} venue(s) across "
         f"{len(results)} film(s)")
+    return results
+
+
+def _parse_landmark_canada_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse Nathan Gendron (Landmark Cinemas Canada) spreadsheet holdover format.
+    Tab-delimited header: Studio | Cinema | Film | Status | AM | Early Mat | Late Mat | Early Eve | Late Eve
+    All rows treated as holdovers. Phrase derived from showtime columns:
+      mat + eve → "mats+ee" (Alternating); mat only → "mats" (Multiple Matinees); else → ""
+    """
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines:
+        return {}
+    # Find header row with studio+cinema+film columns
+    hdr_idx = None
+    hdrs = []
+    for i, line in enumerate(lines):
+        if '\t' not in line:
+            continue
+        cells = [c.strip().lower() for c in line.split('\t')]
+        if 'studio' in cells and 'cinema' in cells and 'film' in cells:
+            hdr_idx = i
+            hdrs = cells
+            break
+    if hdr_idx is None:
+        return {}
+
+    def _col(name):
+        return hdrs.index(name) if name in hdrs else -1
+
+    i_cinema    = _col('cinema')
+    i_film      = _col('film')
+    i_am        = _col('am')
+    i_early_mat = _col('early mat')
+    i_late_mat  = _col('late mat')
+    i_early_eve = _col('early eve')
+    i_late_eve  = _col('late eve')
+
+    def _intcell(cells, idx):
+        try:
+            return int(cells[idx]) if 0 <= idx < len(cells) else 0
+        except (ValueError, TypeError):
+            return 0
+
+    results: dict[str, list[dict]] = {}
+    for line in lines[hdr_idx + 1:]:
+        if '\t' not in line:
+            continue
+        cells = [c.strip() for c in line.split('\t')]
+        cinema = cells[i_cinema] if i_cinema < len(cells) else ""
+        film   = cells[i_film]   if i_film   < len(cells) else ""
+        if not cinema or not film:
+            continue
+        has_mat = any(_intcell(cells, c) > 0 for c in [i_am, i_early_mat, i_late_mat] if c >= 0)
+        has_eve = any(_intcell(cells, c) > 0 for c in [i_early_eve, i_late_eve]        if c >= 0)
+        phrase  = "mats+ee" if has_mat and has_eve else ("mats" if has_mat else "")
+        results.setdefault(film, []).append({"theatre": cinema, "date": None, "phrase": phrase})
+
+    if not results:
+        return {}
+    log(f"  [landmark-canada] Detected Landmark Canada holdover format — "
+        f"{sum(len(v) for v in results.values())} venue(s) across {len(results)} film(s)")
+    return results
+
+
+def _parse_holdover_grid_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse indie-circuit holdover grid format (e.g. David Saunders / Pacific NW).
+    Detected by "PRELIMINARY HOLD OVERS" in preamble.
+
+    Tab-delimited layout (pasted from Excel):
+      Row 0: Week of: MM/DD-...  PRELIMINARY HOLD OVERS/FINALS
+      Row 1: (merged headers)  HOLD  FINAL (DAY)  UNDECIDED (X)...
+      Row 2: THEATRE  FILM  (blank)  F  S  S  M  T  W  T  (blank)
+      Data:  theatre  film  hold_x  day_x ... undecided_x
+
+    col[2] = 'x' → hold (phrase="hold")
+    cols[3-9] any 'x' → final (phrase="final")
+    col[10] = 'x' → undecided (skip)
+    """
+    _lines = text.splitlines()
+    if 'preliminary hold overs' not in text.lower():
+        return {}
+
+    import re as _re
+    _date: str | None = None
+    for _l in _lines[:10]:
+        _m = _re.search(r'week\s+of[:\s]+(\d{1,2})/(\d{1,2})', _l, _re.IGNORECASE)
+        if _m:
+            _date = f'{int(_m.group(1)):02d}/{int(_m.group(2)):02d}'
+            break
+
+    _SKIP_NAMES = {'theatre', 'theater', 'theatres', 'theaters', 'film', 'title', 'attraction'}
+    results: dict[str, list[dict]] = {}
+    for _l in _lines:
+        _cols = _l.split('\t')
+        if len(_cols) < 3:
+            continue
+        _theatre = _cols[0].strip()
+        _film    = _cols[1].strip() if len(_cols) > 1 else ''
+        if not _theatre or not _film:
+            continue
+        if _theatre.lower() in _SKIP_NAMES or _film.lower() in _SKIP_NAMES:
+            continue
+
+        _hold_x      = _cols[2].strip().lower() if len(_cols) > 2 else ''
+        _day_xs      = [_cols[i].strip().lower() for i in range(3, min(10, len(_cols)))]
+        _undecided_x = _cols[10].strip().lower() if len(_cols) > 10 else ''
+
+        if _undecided_x == 'x':
+            continue
+        elif _hold_x == 'x':
+            _phrase = 'hold'
+        elif any(x == 'x' for x in _day_xs):
+            _phrase = 'final'
+        else:
+            continue
+
+        results.setdefault(_film, []).append({
+            'theatre': _theatre,
+            'date':    _date,
+            'phrase':  _phrase,
+        })
+
+    if not results:
+        return {}
+    log(f"  [holdover-grid] Detected holdover grid format — "
+        f"{sum(len(v) for v in results.values())} venue(s) across {len(results)} film(s)")
     return results
 
 
@@ -1005,6 +1326,14 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     if not text or not text.strip():
         return {}
 
+    # ── Watson/Imagine/Cinestarz Canada: Booking Week|Group|Theatre Name|O/H ───
+    _wt_result = _parse_watson_booking(text)
+    if _wt_result:
+        return _wt_result
+    # ── Landmark Cinemas Canada (Nathan Gendron): Studio|Cinema|Film|showtimes ──
+    _lc_result = _parse_landmark_canada_booking(text)
+    if _lc_result:
+        return _lc_result
     # ── Cineplex/policy format: Theatre# - ABBREV Name / Title / Screening ──────
     _cx_result = _parse_cineplex_policy_booking(text)
     if _cx_result:
@@ -1017,6 +1346,14 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     _gp_result = _parse_glen_parham_booking(text)
     if _gp_result:
         return _gp_result
+    # ── Blue Smiley / CFB Rentrak-grid: Rentrak ID|CIRCUIT|THEATRE|TITLE ─────
+    _bs_result = _parse_blue_smiley_booking(text)
+    if _bs_result:
+        return _bs_result
+    # ── Holdover grid (David Saunders / indie circuits): PRELIMINARY HOLD OVERS
+    _hg_result = _parse_holdover_grid_booking(text)
+    if _hg_result:
+        return _hg_result
     # ──────────────────────────────────────────────────────────────────────────
 
     lines    = [l for l in text.splitlines() if l.strip()]
@@ -1067,6 +1404,10 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     # Fallback: try AMC booking format
     if not results:
         results = _parse_amc_booking(text)
+
+    # Fallback: try IBS (Culbertson) email format — comma list before "opening FILM"
+    if not results:
+        results = _parse_ibs_booking(text)
 
     # Fallback: try email-style booking format if nothing was found
     if not results:
@@ -2066,13 +2407,23 @@ _FILTER_TYPE_HINTS: dict = {
     "contact_person": ["contact person"],
     "booker":         ["booker"],
     "venue_group":    ["venue group"],
+    "venue":          ["venue(s)", "venue"],
     "tv_market":      ["tv market"],
     "capabilities":   ["capabilities"],
 }
 
 
+# Contact name normalisation — maps what users type → what Mica has on file
+_CONTACT_NAME_MAP: dict[str, str] = {
+    "joshua wymer": "Josh Wymer",
+}
+
+def _normalize_contact(name: str) -> str:
+    return _CONTACT_NAME_MAP.get(name.strip().lower(), name.strip())
+
 def _filter_by_buyer(page, contact: str, filter_type: str = "contact_person"):
     """Set the specified ng-select filter on the plan detail page."""
+    contact = _normalize_contact(contact)
     hints = _FILTER_TYPE_HINTS.get(filter_type, ["contact person"])
     idx: int = page.evaluate(
         """
@@ -2237,6 +2588,291 @@ _CITY_VENUE_ALIASES: dict[str, str] = {
     "hooky entertainment + sdx + imax":        "Hooky Entertainment + SDX + IMAX Hutto 8",
     "redstone 14 cinemas w/pdx":               "Red Stone 14 Cinemas",
     "redstone 14 cinemas":                     "Red Stone 14 Cinemas",
+    # Kaitlin Privitera (AMC KC/Midwest) — report short names differ from Mica names
+    "studio 28":               "AMC Studio Olathe 30",
+    "independence 20":         "AMC Independence Commons 20",
+    "prairiefire 17":          "AMC DINE-IN Prairie Fire 17",
+    "legends 14":              "AMC Legends Kansas City 14",
+    "northrock 14":            "AMC Northrock Wichita 14",
+    "springfield 11":          "AMC Springfield 11",
+    # James Douglas (AMC SE/Florida) — report short names differ from Mica names
+    "regency 24":            "AMC Regency Sq Jacksonville 24 & IMAX",
+    "aventura mall 24":      "AMC Aventura 24 & IMAX",
+    "sunset place 24":       "AMC Sunset S Miami 24 & IMAX",
+    "weston 8":              "AMC Weston Cinema Sunrise 8",
+    "bayou 15":              "AMC Bayou Pensacola 15 & IMAX",
+    "avenue 16":             "AMC Avenue Melbourne 16",
+    "tallahassee 20":        "AMC Tallahassee Mall 20 & IMAX",
+    "veterans expressway 24":"AMC Veterans Tampa 24 & IMAX",
+    "regency 20":            "AMC Regency Sq Brandon 20 & IMAX",
+    "woodlands square 20":   "AMC Woodland Sq Oldsmar 20 & IMAX",
+    "riverview 14":          "AMC Riverview Gibsonton 14",
+    "westshore plaza 14":    "AMC Westshore Tampa 14",
+    "sundial 12":            "AMC Sundial St Petersburg",
+    "coral ridge 10":        "AMC Coral Ridge Ft Lauderdale 10",
+    "pensacola 18":          "AMC CLASSIC Pensacola 18",
+    # Sergio Candelas (AMC Central/Southwest) — report short names differ from Mica names
+    "quail springs mall 24": "AMC Quail Springs Oklahoma City 24 & IMAX",
+    "town square 18":        "AMC Town Square Las Vegas 18 & IMAX",
+    "decatur 10":            "AMC CLASSIC Decatur 10",
+    "springfield 12":        "AMC CLASSIC Springfield 12 with IMAX",
+    "springfield 8":         "AMC Springfield 8",
+    "esplanade 14":          "AMC DINE-IN Esplanade 14",
+    # Ron Wooley (AMC NE) — report short names differ from Mica names
+    "plainville 20":   "AMC Plainville Cinema 20",
+    "palisades 21":    "AMC Palisades Center 21",
+    "freehold 14":     "AMC Freehold Metroplex 14",
+    "aviation 12":     "AMC Aviation Linden 12",
+    "levittown 10":    "AMC DINE-IN Levittown 10",
+    "landmark 8":      "AMC Landmark 8",
+    # Dave Glass (AMC) — report short names differ from Mica names
+    "southlands 16":        "AMC Southlands Aurora 16",
+    "flatiron crossing 14": "AMC Flatiron Broomfield 14",
+    "orchard 12":           "AMC Orchard Town Center Westminster 12",
+    "mayfair 18":           "AMC Mayfair Mall Wauwatosa 18",
+    "southdale center 16":  "AMC Southdale Edina 16",
+    "southgate 9":          "AMC DINE-IN Southgate 9",
+    "southcenter 16":       "AMC Southcenter Tukwila 16 & IMAX",
+    "factoria 8":           "AMC Factoria Bellevue 8",
+    "alderwood 16":         "AMC Alderwood Lynnwood 16",
+    # Kathryn Wintermyer (AMC Detroit/OH/PA) — report short names differ from Mica names
+    "forum 30":             "AMC Forum Sterling Heights 17",
+    "gratiot 15":           "AMC Star Gratiot Clinton Township 15",
+    "john r 15":            "AMC John R Theatre 15",
+    "stonybrook 20":        "AMC Stonybrook Louisville 20",
+    "309 cinema 9":         "AMC 309 Cinemas North Wales 9",
+    "berkshire 8":          "AMC Berkshire Wyomissing 8",
+    "marlton 8":            "AMC Marlton Cinemas 8",
+    "westmoreland 15":      "AMC Westmoreland Greensburg 15",
+    # ── Tom McCauley (AMC New England / Mid-Atlantic) ─────────────────────────
+    "methuen 20":           "AMC Methuen at the Loop 20",
+    "hampton 24":           "AMC Hampton Towne Centre 24",
+    "loudoun 11":           "AMC Loudoun Station Ashburn 11",
+    "worldgate 9":          "AMC Worldgate Herndon 9",
+    "columbia mall 14":     "AMC Columbia Maryland 14",
+    "mj capital center 12": "AMC Magic Johnson Capital Center 12",
+    "st charles towne center 9": "AMC St. Charles Waldorf 9",
+    "academy 8":            "AMC Academy Greenbelt 8",
+    # ── Justin Johnson (AMC Chicago / Midwest / Indiana / Rockford) ───────────
+    "yorktown 18":          "AMC Yorktown Lombard 18",
+    "galewood 14":          "AMC Galewood Crossings 14",
+    "hawthorn 12":          "AMC Hawthorn Vernon Hills 12",
+    "randhurst 12":         "AMC Randhurst Mount Prospect 12",
+    "peru 8":               "AMC Peru Mall 8",
+    "castleton square 14":  "AMC Castleton Indianapolis 14",
+    "washington sq 12":     "AMC Washington Square 12",
+    # ── Dan Cammarata (AMC Texas / SE — DFW / Houston / SA / Austin / Savannah) ─
+    "northpark 15":              "AMC North Park Dallas 15 & IMAX",
+    "lakeline 9":                "AMC Lakeline Mall Cedar Park 9",
+    "fountains 18":              "AMC Fountains Stafford 18 & IMAX",
+    "rivercenter 11":            "AMC Rivercenter San Antonio 9",
+    "sikes 10":                  "AMC Sikes Senter 10",
+    "corpus 16":                 "AMC Corpus Christi 16",
+    "stonebriar mall 24":        "AMC Stonebriar Frisco 24 & IMAX",
+    "firewheel town center 18":  "AMC Firewheel Garland 18",
+    "eastchase 9":               "AMC Eastchase Ft Worth 9",
+    "willowbrook 24":            "AMC Willowbrook Houston 24",
+    "brazos 14":                 "AMC Brazos Stadium Lake Jackson 14",
+    # ── Devan Tolbert (AMC SE / Louisiana / Carolinas) ───────────────────────
+    "hanes 12":                  "AMC Hanes Winston Salem 12",
+    # ── Brandon Ferguson (AMC LA / San Diego / Sacramento / SF Bay Area) ────────
+    "orange 30":                 "AMC Block Orange 30 & IMAX",
+    "tyler 16":                  "AMC Tyler Riverside 16 & IMAX",
+    "mercado 20":                "AMC Mercado Santa Clara 20 & IMAX",
+    "metreon 16":                "AMC Metreon San Francisco 16 & IMAX",
+    "eastridge 15":              "AMC Eastridge Mall San Jose 15 & IMAX",
+    "saratoga 14":               "AMC Saratoga San Jose 14 & IMAX",
+    # ── Kelsey Kash (AMC AL / TN / Chattanooga / Knoxville / Tri-Cities) ────────
+    "dothan pavilion 12":        "AMC CLASSIC Dothan Pavillion 12",
+    "vestavia 10":               "AMC DINE-IN Vestavia Hills 10",
+    "battlefield 10":            "AMC CLASSIC Battlefield Ft Oglethorpe 10",
+    "thoroughbred 20":           "AMC Thoroughbred Franklin 20 & IMAX",
+    "stones river 9":            "AMC Stone River 9",
+    # ── David Saunders (Pacific NW / OR / WA indie circuit) ──────────────────
+    "bremerton":                 "SEEfilm Cinema",
+    "cinestars":                 "Hood River Cinemas 5",
+    "coast":                     "Coast Fort Bragg 4",
+    "milwaukie":                 "Milwaukie Portland 2",
+    "living room pdx":           "Living Room Theatres Portland",
+    "living room indy":          "Living Room Theaters Indianapolis",
+    "battle ground":             "Battle Ground Cinema 8",
+    "canby":                     "Canby Cinema 8",
+    "independence":              "Independence Cinema 8",
+    "oak grove":                 "Oak Grove Portland 8",
+    "roseburg":                  "Roseburg Cinema",
+    "sandy":                     "Sandy Cinema 8",
+    "scappoose":                 "Scappoose Cinema 7",
+    # ── Blue Smiley / CFB Epic + GTC (Rentrak-grid fallback for fuzzy failures) ─
+    "regency square 8":              "Epic Regency Cinema Stuart 8",
+    # ── Glen Parham GTC — defensive fallbacks (city+state lookup handles these;
+    #    aliases fire only if raw booking name reaches JS fuzzy matcher) ─────────
+    "riverwatch":                    "GTC Riverwatch Cinemas 12",
+    "gateway 7":                     "GTC Gateway 7",
+    "island 7":                      "GTC Island 7",
+    "smithfield cinemas 10":         "GTC Smithfield 10",
+    "valdosta stadium 15 w/gtx":     "GTC Valdosta 15",
+    "pooler stadium 14 w/gtx":       "GTC Pooler 14",
+    "mall 7":                        "GTC Mall Cinemas 7",
+    "evans 14":                      "GTC Evans 14",
+    "liberty 9":                     "GTC Liberty 9",
+    "mountain cinemas 8":            "GTC Mountain Cinemas 8",
+    "university 16 cinemas w/gtx":   "GTC University 16",
+    "moultrie stadium 6 cinemas":    "GTC Moultrie 6",
+    "danville stadium 12":           "GTC Danville 12",
+    # ── Cinemark DFW (Eric Bond) — historical/local names → Mica master names ──
+    "cinemark central plano 10":          "cinemark movies plano 10",
+    "cut! by cinemark":                   "cinemark cut! 10",
+    "cinemark 17":                        "cinemark 17 + imax",
+    "rave ridgmar 13":                    "cinemark ridgmar mall 13 + xd",
+    "rave north east mall 18":            "cinemark northeast mall 18 + xd",
+    "cinemark cleburne":                  "cinemark cinema cleburne 6",
+    "cinemark 12 and xd":                 "cinemark mansfield 12 + xd",
+    "tinseltown grapevine and xd":        "cinemark tinseltown grapevine 17 + xd",
+    "cinemark 17 + imax":                 "cinemark tulsa 17",
+    "cinemark 14, cedar hill":            "cinemark cedar hill 14",
+    "movies 14, lancaster":               "cinemark movies lancaster 14",
+    "cinemark 14, denton":                "cinemark denton 14",
+    "cinemark 12, sherman":               "cinemark sherman 12",
+    "movies 8, paris":                    "cinemark movies paris 8",
+    "cinemark west plano, plano":         "cinemark movies plano 10",
+    "cinemark west plano":                "cinemark movies plano 10",
+    "cinemark (the legacy), plano":       "cinemark legacy 24 + xd",
+    "cinemark (the legacy)":              "cinemark legacy 24 + xd",
+    "cinemark allen 16 and xd, allen":    "cinemark allen 16 + xd",
+    "cinemark allen 16 and xd":           "cinemark allen 16 + xd",
+    "cinemark roanoke 14, roanoke":       "cinemark roanoke 14 + xd",
+    "cinemark roanoke 14":                "cinemark roanoke 14 + xd",
+    "cinemark rockwall 14 and xd, rockwall": "cinemark rockwall 14 + xd",
+    "cinemark rockwall 14 and xd":        "cinemark rockwall 14 + xd",
+    # ── Cinemark national shorthand → Mica full name ─────────────────────────
+    "tinseltown usa, jacksonville":       "cinemark tinseltown jacksonville 20 + xd",
+    "tinseltown usa, fayetteville":       "cinemark tinseltown fayetteville 17 + xd",
+    "tinseltown usa, north aurora":       "cinemark tinseltown north aurora 17 usa",
+    "cinemark orlando and xd":            "cinemark festival bay orlando 20 + xd",
+    "cinemark orlando and xd, orlando":   "cinemark festival bay orlando 20 + xd",
+    "cinemark west dundee, il":           "cinemark spring hill mall 8 + xd",
+    "cinemark west dundee":               "cinemark spring hill mall 8 + xd",
+    "movies 8 ladson oakbrook ii":        "cinemark movies summerville 8",
+    "movies 8 ladson oakbrook ii, summerville": "cinemark movies summerville 8",
+    "movies 10, bourbonnais":             "cinemark movies bourbonnais 10",
+    "movies 10":                          "cinemark movies bourbonnais 10",
+    "cinemark louis joliet mall":         "cinemark louis joliet mall 14",
+    "deer park 16":                       "cinemark century deer park 16",
+    "deer park 16, deer park":            "cinemark century deer park 16",
+    "valparaiso commons shopping center": "cinemark at valparaiso 12",
+    "cinemark palace 20, boca raton":     "cinemark palace 20 + xd",
+    "cinemark palace 20":                 "cinemark palace 20 + xd",
+    "cinemark paradise 24, davie":        "cinemark paradise 24 + xd",
+    "cinemark paradise 24":               "cinemark paradise 24 + xd",
+    "cinemark bluffton, bluffton":        "cinemark bluffton 12",
+    "cinemark bluffton":                  "cinemark bluffton 12",
+    "cinemark seven bridges":             "cinemark 7 bridges woodridge 16 imax",
+    "cinemark seven bridges, woodridge":  "cinemark 7 bridges woodridge 16 imax",
+    # ── Cinemark general overrides ────────────────────────────────────────────
+    "cinemark 22 + imax":                 "cinemark lancaster 22",
+    "cinemark 22 + imax, lancaster":      "cinemark lancaster 22",
+    "cinemark 16 +xd, victorville":       "cinemark victorville 16 + xd",
+    # ── Cinemark Taylor Reynolds (SW/UT/AZ/NV) ────────────────────────────────
+    "cinemark 16, mesa":                  "cinemark mesa 16",
+    "cinemark 16, provo":                 "cinemark provo 16",
+    "cinemark 24 + xd, west jordan":      "cinemark west jordan 24+xd",
+    "imperial valley 14, el centro":      "cinemark century imperial valley mall 14",
+    "imperial valley 14":                 "cinemark century imperial valley mall 14",
+    "sierra vista 10, sierra vista":      "cinemark sierra vista 10",
+    "sierra vista 10":                    "cinemark sierra vista 10",
+    "cinemark spanish fork + xd, spanish fork": "cinemark spanish fork 8+xd",
+    "cinemark spanish fork + xd":         "cinemark spanish fork 8+xd",
+    "henderson 12, henderson":            "cinemark cinedome 12 (henderson)",
+    "henderson 12":                       "cinemark cinedome 12 (henderson)",
+    "cinemark draper + xd, draper":       "cinemark draper 12 + xd",
+    "cinemark draper + xd":               "cinemark draper 12 + xd",
+    "cinemark farmington + xd, farmington": "cinemark farmington 14+ xd",
+    "cinemark farmington + xd":           "cinemark farmington 14+ xd",
+    "cinemark riverton + xd, riverton":   "cinemark riverton ridgewood 14 +xd",
+    "cinemark riverton + xd":             "cinemark riverton ridgewood 14 +xd",
+    "century el con + xd, tucson":        "cinemark century 20 el con and xd (tucson)",
+    "century el con + xd":                "cinemark century 20 el con and xd (tucson)",
+    "cinemark 12, american fork":         "cinemark american fork 12",
+    # ── Cinemark Pacific NW (Josh Wymer) ─────────────────────────────────────
+    "lincoln square cinema with imax":    "cinemark lincoln square cinemas imax 16",
+    "lincoln square cinema bistro 6":     "cinemark reserve lincoln square dine-in 6",
+    "cinemark totem lake + xd":           "cinemark village at totem lake 8",
+    "century walla walla grand cinema 12":"cinemark walla walla grand cinema12",
+    "century arden and xd, sacramento":   "cinemark century arden + xd 14",
+    "century arden and xd":               "cinemark century arden + xd 14",
+    "century marina + xd, marina":        "cinemark century marina + xd 5",
+    "century marina + xd":                "cinemark century marina + xd 5",
+    "cinemark 17, springfield":           "cinemark springfield 17",
+    # ── Diane Johnson (CSC) — Waikoloa name has no Mica city word ─────────────
+    "waikoloa 3":                         "waikoloa village cinema 3",
+    # ── Watson / Imagine Cinemas Canada ──────────────────────────────────────
+    # Bare city/location names used by Richard Watson (Imagine + Cinestarz groups)
+    "promenade mall":                     "imagine cinemas promenade 6",
+    "london":                             "imagine cinemas london",
+    "lakeshore windsor":                  "imagine cinemas lakeshore",
+    "alliston":                           "imagine cinemas alliston",
+    # ── Watson / Cinestarz (CineStarz Quebec/Ontario) ─────────────────────────
+    "cote des nieges":                    "cine starz cote-des-neiges 7",
+    "cote-des-nieges":                    "cine starz cote-des-neiges 7",
+    "deluxe taschereau":                  "cine starz taschereau 12",
+    "deluxe longueuil":                   "cinestarz longueuil 14",
+    "burlington":                         "cine starz burlington",
+    "st. laurent":                        "cine starz st laurent centre",
+    "st laurent":                         "cine starz st laurent centre",
+    # ── Matt Culbertson / IBS (Indiana Booking Service) ──────────────────────
+    # Bare city names used by IBS; venue names in Mica differ substantially
+    "goshen":                             "linway plaza goshen 14",
+    "jerseyville":                        "the stadium theater 3",
+    "litchfield":                         "westside litchfield 3",
+    "rensselaer":                         "fountain stone theaters rensselaer 5",
+    "nappanee theatre":                   "nappanee theatre 1",
+    "goshen, in":                         "linway plaza goshen 14",
+    "jerseyville, il":                    "the stadium theater 3",
+    "litchfield, il":                     "westside litchfield 3",
+    "rensselaer, in":                     "fountain stone theaters rensselaer 5",
+    # ── Jennifer Solorzano (Cinemark CO / NM / TX West circuit) ─────────────
+    "cinemark 12, greeley":               "cinemark greeley 12",
+    "cinemark 16, fort collins":          "cinemark fort collins 16",
+    "main place 6, mcallen":              "cinemark movies 6",
+    "main place 6":                       "cinemark movies 6",
+    "cinemark 16 + xd, brownsville":      "cinemark brownsville 16 + xd",
+    "cinemark 16 + xd, harlingen":        "cinemark harlingen 16 + xd",
+    "cinemark abilene and xd, abilene":   "cinemark abilene 12",
+    "cinemark abilene and xd":            "cinemark abilene 12",
+    # ── Andy Anderson (Cinemark SF Bay Area) ─────────────────────────────────
+    "century at hayward, hayward":        "cinemark century at hayward 12",
+    "century at hayward":                 "cinemark century at hayward 12",
+    # ── Beth Teal (Cinemark East / Midwest) ──────────────────────────────────
+    "cinemark towson + xd, towson":           "cinemark towson 15 + xd",
+    "cinemark towson + xd":                   "cinemark towson 15 + xd",
+    "cinemark 15 + xd, hadley":               "cinemark hadley 15 + xd",
+    "cinemark tinseltown + xd, louisville":   "cinemark tinseltown louisville + xd",
+    "cinemark paducah, paducah":              "cinemark paducah 12",
+    "cinemark paducah":                       "cinemark paducah 12",
+    # ── Jennifer Hernandez (Cinemark SoCal — LA / Palm Springs) ─────────────
+    "cinemark 12 and xd, los angeles":        "cinemark 12 howard hughes la and xd",
+    "cinemark 16, palmdale":                  "cinemark antelope valley mall palmdale 16",
+    "century la quinta + xd, la quinta":      "cinemark century la quinta 12 + xd",
+    # ── Allie Fullmer (Cinemark TX — Houston / Austin / SA / Corpus) ─────────
+    "tinseltown 17 + xd, the woodlands":     "cinemark the woodlands 17 + xd",
+    "cinemark 18 + xd, webster":             "cinemark webster 18 + xd",
+    "hollywood usa 20, pasadena":            "cinemark hollywood pasadena 20",
+    "cinemark 19 + xd, katy":                "cinemark katy 19 + xd",
+    "cinemark 12 + xd, pearland":            "cinemark pearland 12 + xd",
+    "cinemark 12 + xd, cypress":             "cinemark cypress 12 + xd",
+    "cut! by cinemark cypress, cypress":     "cinemark cut 8!",
+    "cut! by cinemark cypress":              "cinemark cut 8!",
+    "cinemark 12, rosenberg":                "cinemark rosenberg 12",
+    "cinemark 12, victoria":                 "cinemark victoria 12",
+    "century 16 + imax, corpus christi":     "cinemark century corpus christi 16 + xd and imax",
+    "college station + xd, college station": "cinemark college station 18 + xd",
+    "stone hill town center, pflugerville":  "cinemark stone hill town ctr pflugerville 9",
+    "stone hill town center":               "cinemark stone hill town ctr pflugerville 9",
+    "cinemark 14, round rock":               "cinemark round rock 14",
+    "southpark meadows 14, austin":          "cinemark southpark mall austin 14",
+    "southpark meadows 14":                  "cinemark southpark mall austin 14",
+    "movies 8, del rio":                     "cinemark movies del rio 8",
+    "cinemark 7, eagle pass":                "cinemark eagle pass 7",
 }
 
 
@@ -3158,7 +3794,7 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview matches without making any changes in Mica")
     parser.add_argument("--filter-type",
-                        choices=["contact_person", "booker", "venue_group", "tv_market", "capabilities"],
+                        choices=["contact_person", "booker", "venue_group", "venue", "tv_market", "capabilities"],
                         default="contact_person",
                         help="Which Mica plan dropdown to filter by (default: contact_person)")
     parser.add_argument("--daemon", action="store_true",

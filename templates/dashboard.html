@@ -428,11 +428,11 @@
     </div>
     <div class="tpl-field">
       <label>Opening line</label>
-      <input id="tpl-opener" placeholder="Thank you for these holds.">
+      <input id="tpl-opener" placeholder="Can you please take a second look at the locations listed below.">
     </div>
     <div class="tpl-field">
       <label>Closing line</label>
-      <input id="tpl-closer" placeholder="Please let me know how we can help.">
+      <input id="tpl-closer" placeholder="Please let me know if you can make this work.">
     </div>
     <div class="tpl-field">
       <label>Sign-off</label>
@@ -451,16 +451,8 @@
         <label style="display:flex; align-items:center; gap:6px; font-size:13px; text-transform:none; letter-spacing:0; color:#374151; font-weight:400;">
           <input type="checkbox" id="tpl-show-rank"> Rank
         </label>
-      </div>
-    </div>
-    <div class="tpl-field">
-      <label>Include competing films</label>
-      <div style="display:flex; gap:18px; margin-top:4px;">
         <label style="display:flex; align-items:center; gap:6px; font-size:13px; text-transform:none; letter-spacing:0; color:#374151; font-weight:400;">
-          <input type="checkbox" id="tpl-show-above"> Ranked above
-        </label>
-        <label style="display:flex; align-items:center; gap:6px; font-size:13px; text-transform:none; letter-spacing:0; color:#374151; font-weight:400;">
-          <input type="checkbox" id="tpl-show-below"> Ranked below
+          <input type="checkbox" id="tpl-show-total"> Total titles
         </label>
       </div>
     </div>
@@ -688,15 +680,14 @@ function renderSummary() {
 // ── Email template preferences (localStorage) ────────────────────────────────
 const TPL_KEY = 'angelEmailTplPrefs';
 const TPL_DEFAULTS = {
-  greeting:  'Hi {name}, I hope all is well.',
-  opener:    'Thank you for these holds.',
-  closer:    'Please let me know how we can help.',
-  signoff:   'Thank you,',
-  name:      '',
-  showGross: true,
-  showRank:  true,
-  showAbove: true,
-  showBelow: true,
+  greeting:   'Hey {name},',
+  opener:     'Can you please take a second look at the locations listed below.',
+  closer:     'Please let me know if you can make this work.',
+  signoff:    'Thank you,',
+  name:       '',
+  showGross:  true,
+  showRank:   true,
+  showTotal:  true,
 };
 function getTplPrefs() {
   try { return Object.assign({}, TPL_DEFAULTS, JSON.parse(localStorage.getItem(TPL_KEY) || '{}')); }
@@ -711,8 +702,7 @@ function openTplModal() {
   document.getElementById('tpl-name').value           = p.name;
   document.getElementById('tpl-show-gross').checked   = p.showGross;
   document.getElementById('tpl-show-rank').checked    = p.showRank;
-  document.getElementById('tpl-show-above').checked   = p.showAbove;
-  document.getElementById('tpl-show-below').checked   = p.showBelow;
+  document.getElementById('tpl-show-total').checked   = p.showTotal;
   document.getElementById('tpl-modal-overlay').classList.add('open');
 }
 function closeTplModal() {
@@ -727,8 +717,7 @@ function saveTplModal() {
     name:      document.getElementById('tpl-name').value.trim(),
     showGross: document.getElementById('tpl-show-gross').checked,
     showRank:  document.getElementById('tpl-show-rank').checked,
-    showAbove: document.getElementById('tpl-show-above').checked,
-    showBelow: document.getElementById('tpl-show-below').checked,
+    showTotal: document.getElementById('tpl-show-total').checked,
   };
   localStorage.setItem(TPL_KEY, JSON.stringify(prefs));
   closeTplModal();
@@ -755,48 +744,40 @@ function renderEmailTemplate() {
 
   if (finals.length === 0) { panel.style.display = "none"; return; }
 
-  const locationLines = finals.map((t, i) => {
-    const theatre     = t.theatre || t.ml_venue || "";
-    const angel       = t.films.find(f => f.is_angel);
-    const gross       = angel.gross ? "$" + Number(angel.gross).toLocaleString() : "";
-    const angelRank = angel.rank || 0;
-    const competitors = [...t.films]
-      .filter(f => !f.is_angel)
-      .filter(f => {
-        if (prefs.showAbove && f.rank < angelRank) return true;
-        if (prefs.showBelow && f.rank > angelRank) return true;
-        if (!prefs.showAbove && !prefs.showBelow) return false;
-        return false;
-      })
-      .sort((a, b) => a.rank - b.rank)
-      .map(f => f.title);
-    const filmList = competitors.join(", ");
-
-    const details = [
-      prefs.showGross && gross        ? `${gross} gross`       : null,
-      prefs.showRank  && angel.rank   ? `ranked #${angel.rank}` : null,
-    ].filter(Boolean).join(", ");
-    const detailsPart = details ? `, ${details}` : "";
-
-    if (i === 0) {
-      return filmList
-        ? `At ${theatre}${detailsPart}, can we hold with the following: ${filmList}?`
-        : `At ${theatre}${detailsPart}, can we hold?`;
-    } else {
-      return filmList
-        ? `${theatre}${detailsPart}: ${filmList}?`
-        : `${theatre}${detailsPart}?`;
+  // Get angel film title from first final theatre for {film} substitution
+  const angelTitle = (() => {
+    for (const t of finals) {
+      const af = t.films.find(f => f.is_angel);
+      if (af) return af.title;
     }
+    return "";
+  })();
+
+  const locationLines = finals.map(t => {
+    const theatre   = t.theatre || t.ml_venue || "";
+    const angel     = t.films.find(f => f.is_angel);
+    const gross     = angel.gross ? "$" + Number(angel.gross).toLocaleString() : "";
+    const angelRank = angel.rank || 0;
+    const totalFilms = t.films.length;
+
+    const parts = [];
+    if (prefs.showGross && gross)     parts.push(`We grossed ${gross}`);
+    if (prefs.showRank  && angelRank) parts.push(`ranked #${angelRank}`);
+    if (prefs.showTotal && totalFilms) parts.push(`out of ${totalFilms}`);
+
+    const detail = parts.length ? " " + parts.join(" and ") + "." : "";
+    return `At ${theatre},${detail}`;
   });
 
   const buyerFull = (ALL_THEATRES.find(t => t.buyer) || {}).buyer || "";
   const buyerName = buyerFull ? buyerFull.trim().split(/\s+/)[0] : "Contact";
   const greeting  = prefs.greeting.replace('{name}', buyerName);
+  const opener    = prefs.opener;
   const signature = prefs.name ? `${prefs.signoff}\n${prefs.name}` : prefs.signoff;
 
   const plain =
     `${greeting}\n\n` +
-    `${prefs.opener}\n\n` +
+    `${opener}\n\n` +
     locationLines.join("\n\n") +
     `\n\n${prefs.closer}\n\n${signature}`;
 

@@ -513,7 +513,7 @@ HTML = r"""<!DOCTYPE html>
   <h1>Angel Studios</h1>
   <div id="user-nav" style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;">
     <span id="user-email" style="color:#aaa;"></span>
-    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">5/1 Deploy</span>
+    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">5/7 Deploy 10:30 AM</span>
     <a href="/aliases" style="color:#aaa;text-decoration:none;font-size:12px;">Venue Aliases</a>
     <a id="profile-link" href="/auth/profile" style="color:#00bcd4;text-decoration:none;display:none;">My Profile</a>
     <a id="logout-link" href="/auth/logout" style="color:#888;text-decoration:none;display:none;">Sign Out</a>
@@ -583,10 +583,10 @@ HTML = r"""<!DOCTYPE html>
         <option value="contact_person">Contact Person</option>
         <option value="booker">Booker</option>
         <option value="venue_group">Venue Group</option>
+        <option value="venue">Venue</option>
         <option value="tv_market">TV Market</option>
-        <option value="capabilities">Capabilities</option>
       </select>
-      <input id="mica-contact" placeholder="Filter value (auto-filled from booking)" style="flex:1;margin:0;">
+      <input id="mica-contact" placeholder="Filter value — comma-separate for multiple (or blank for all)" style="flex:1;margin:0;">
     </div>
 
     <div id="mica-mode-toggle">
@@ -646,8 +646,8 @@ HTML = r"""<!DOCTYPE html>
           <option value="contact_person">Contact Person</option>
           <option value="booker">Booker</option>
           <option value="venue_group">Venue Group</option>
+          <option value="venue">Venue</option>
           <option value="tv_market">TV Market</option>
-          <option value="capabilities">Capabilities</option>
         </select>
         <input id="booking-contact" class="booking-field" placeholder="Filter value" style="flex:1;margin:0;">
       </div>
@@ -1206,7 +1206,6 @@ async function runMica() {
   // Use cached booking text OR whatever is currently in the paste box
   const booking = lastBookingText || document.getElementById('paste-area').value.trim();
 
-  if (!contact) { alert('Please fill in the filter value field.'); return; }
   if (!booking) { alert('Please paste the booking data in the text box first.'); return; }
 
   const btn = document.getElementById('mica-run-btn');
@@ -2092,7 +2091,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             filter_type = payload.get('filter_type', 'contact_person').strip()
             if mode not in ('demo', 'prod'):
                 mode = 'demo'
-            if filter_type not in ('contact_person', 'booker', 'venue_group', 'tv_market', 'capabilities'):
+            if filter_type not in ('contact_person', 'booker', 'venue_group', 'venue', 'tv_market'):
                 filter_type = 'contact_person'
 
             # Write booking to a temp CSV
@@ -2140,7 +2139,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             filter_type = payload.get('filter_type', 'contact_person').strip()
             if mode not in ('demo', 'prod'):
                 mode = 'demo'
-            if filter_type not in ('contact_person', 'booker', 'venue_group', 'tv_market', 'capabilities'):
+            if filter_type not in ('contact_person', 'booker', 'venue_group', 'venue', 'tv_market'):
                 filter_type = 'contact_person'
 
             # Write booking text to a temp file for the script

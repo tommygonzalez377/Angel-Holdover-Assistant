@@ -82,16 +82,32 @@ CREATE TABLE IF NOT EXISTS venue_aliases (
 );
 
 CREATE TABLE IF NOT EXISTS master_list (
-    unit_id         TEXT PRIMARY KEY,
-    venue_name      TEXT NOT NULL,
-    exhibitor       TEXT DEFAULT '',
-    city            TEXT DEFAULT '',
-    state           TEXT DEFAULT '',
-    country         TEXT DEFAULT '',
-    venue_mb_id     TEXT DEFAULT '',
-    rentrak_id      TEXT DEFAULT '',
-    buyer           TEXT DEFAULT '',
-    last_updated    TIMESTAMP DEFAULT NOW()
+    unit_id          TEXT PRIMARY KEY,
+    venue_name       TEXT NOT NULL,
+    exhibitor        TEXT DEFAULT '',
+    exhibitor_ref_id TEXT DEFAULT '',
+    city             TEXT DEFAULT '',
+    state            TEXT DEFAULT '',
+    state_code       TEXT DEFAULT '',
+    country          TEXT DEFAULT '',
+    country_code     TEXT DEFAULT '',
+    tv_market        TEXT DEFAULT '',
+    venue_group      TEXT DEFAULT '',
+    venue_mb_id      TEXT DEFAULT '',
+    rentrak_id       TEXT DEFAULT '',
+    buyer            TEXT DEFAULT '',
+    angel_booker     TEXT DEFAULT '',
+    last_updated     TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS master_list_changelog (
+    id           SERIAL PRIMARY KEY,
+    venue_mb_id  TEXT NOT NULL,
+    venue_name   TEXT DEFAULT '',
+    field_name   TEXT NOT NULL,
+    old_value    TEXT DEFAULT '',
+    new_value    TEXT DEFAULT '',
+    changed_at   TIMESTAMP DEFAULT NOW()
 );
 """
 
@@ -121,16 +137,32 @@ CREATE TABLE IF NOT EXISTS venue_aliases (
 );
 
 CREATE TABLE IF NOT EXISTS master_list (
-    unit_id         TEXT PRIMARY KEY,
-    venue_name      TEXT NOT NULL,
-    exhibitor       TEXT DEFAULT '',
-    city            TEXT DEFAULT '',
-    state           TEXT DEFAULT '',
-    country         TEXT DEFAULT '',
-    venue_mb_id     TEXT DEFAULT '',
-    rentrak_id      TEXT DEFAULT '',
-    buyer           TEXT DEFAULT '',
-    last_updated    TEXT DEFAULT (datetime('now'))
+    unit_id          TEXT PRIMARY KEY,
+    venue_name       TEXT NOT NULL,
+    exhibitor        TEXT DEFAULT '',
+    exhibitor_ref_id TEXT DEFAULT '',
+    city             TEXT DEFAULT '',
+    state            TEXT DEFAULT '',
+    state_code       TEXT DEFAULT '',
+    country          TEXT DEFAULT '',
+    country_code     TEXT DEFAULT '',
+    tv_market        TEXT DEFAULT '',
+    venue_group      TEXT DEFAULT '',
+    venue_mb_id      TEXT DEFAULT '',
+    rentrak_id       TEXT DEFAULT '',
+    buyer            TEXT DEFAULT '',
+    angel_booker     TEXT DEFAULT '',
+    last_updated     TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS master_list_changelog (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    venue_mb_id TEXT NOT NULL,
+    venue_name  TEXT DEFAULT '',
+    field_name  TEXT NOT NULL,
+    old_value   TEXT DEFAULT '',
+    new_value   TEXT DEFAULT '',
+    changed_at  TEXT DEFAULT (datetime('now'))
 );
 """
 
@@ -381,7 +413,7 @@ def get_master_list_age() -> int:
 
 
 def upsert_master_list(rows: list[dict]):
-    """Bulk upsert master list rows. Each dict should have keys matching the table columns."""
+    """Bulk upsert master list rows. Uses Venue MB ID as primary key. Logs field-level changes."""
     if not rows:
         return
     p = _placeholder()
@@ -389,49 +421,116 @@ def upsert_master_list(rows: list[dict]):
     try:
         cur = conn.cursor()
         now = _now()
+        inserted = updated = skipped = 0
+        changelog_rows = []
+
         for r in rows:
-            unit_id    = str(r.get('unit_id', r.get("Exhibitor's Ref ID", ''))).strip()
+            # unit_id = Venue MB ID (reliable unique key across US/CA/PR)
+            unit_id    = str(r.get('unit_id', r.get('Venue MB ID', ''))).strip()
             venue_name = str(r.get('venue_name', r.get('Venue', ''))).strip()
             if not unit_id or not venue_name:
+                skipped += 1
                 continue
+
+            def _s(key, alt=''):
+                v = r.get(key, r.get(alt, ''))
+                return '' if (v is None or str(v).strip().lower() in ('nan', 'none', '')) else str(v).strip()
+
+            new_vals = {
+                'venue_name':       venue_name,
+                'exhibitor':        _s('exhibitor', 'Exhibitor'),
+                'exhibitor_ref_id': _s('exhibitor_ref_id', "Exhibitor's Ref ID"),
+                'city':             _s('city', 'City'),
+                'state':            _s('state', 'State'),
+                'state_code':       _s('state_code', 'State Code'),
+                'country':          _s('country', 'Country'),
+                'country_code':     _s('country_code', 'Country Code'),
+                'tv_market':        _s('tv_market', 'TV Market'),
+                'venue_group':      _s('venue_group', 'Venue Group'),
+                'venue_mb_id':      unit_id,
+                'rentrak_id':       _s('rentrak_id', 'Venue Rentrak ID'),
+                'buyer':            _s('buyer', 'Buyer'),
+                'angel_booker':     _s('angel_booker', 'Booker(s)'),
+            }
+
+            # Check for existing row to detect changes
+            cur.execute('SELECT * FROM master_list WHERE unit_id = ?', (unit_id,)) if not _IS_POSTGRES else \
+                cur.execute('SELECT * FROM master_list WHERE unit_id = %s', (unit_id,))
+            existing = cur.fetchone()
+
+            if existing:
+                existing_dict = dict(existing)
+                changed_fields = [
+                    f for f in new_vals
+                    if str(existing_dict.get(f, '')).strip() != new_vals[f]
+                ]
+                if changed_fields:
+                    for field in changed_fields:
+                        changelog_rows.append((
+                            unit_id, venue_name, field,
+                            str(existing_dict.get(field, '')), new_vals[field], now
+                        ))
+                    updated += 1
+                else:
+                    skipped += 1
+                    continue
+            else:
+                inserted += 1
+
             args = (
                 unit_id,
-                venue_name,
-                str(r.get('exhibitor', r.get('Exhibitor', ''))).strip(),
-                str(r.get('city',      r.get('City', ''))).strip(),
-                str(r.get('state',     r.get('State', ''))).strip(),
-                str(r.get('country',   '')).strip(),
-                str(r.get('venue_mb_id', r.get('Venue MB ID', ''))).strip(),
-                str(r.get('rentrak_id',  r.get('Venue Rentrak ID', ''))).strip(),
-                str(r.get('buyer',       r.get('Buyer', ''))).strip(),
-                now,
+                new_vals['venue_name'], new_vals['exhibitor'], new_vals['exhibitor_ref_id'],
+                new_vals['city'], new_vals['state'], new_vals['state_code'],
+                new_vals['country'], new_vals['country_code'], new_vals['tv_market'],
+                new_vals['venue_group'], new_vals['venue_mb_id'], new_vals['rentrak_id'],
+                new_vals['buyer'], new_vals['angel_booker'], now,
             )
             if _IS_POSTGRES:
                 cur.execute(f"""
                     INSERT INTO master_list
-                        (unit_id, venue_name, exhibitor, city, state, country,
-                         venue_mb_id, rentrak_id, buyer, last_updated)
-                    VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+                        (unit_id, venue_name, exhibitor, exhibitor_ref_id, city, state, state_code,
+                         country, country_code, tv_market, venue_group, venue_mb_id,
+                         rentrak_id, buyer, angel_booker, last_updated)
+                    VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
                     ON CONFLICT (unit_id) DO UPDATE SET
                         venue_name=EXCLUDED.venue_name, exhibitor=EXCLUDED.exhibitor,
-                        city=EXCLUDED.city, state=EXCLUDED.state,
+                        exhibitor_ref_id=EXCLUDED.exhibitor_ref_id,
+                        city=EXCLUDED.city, state=EXCLUDED.state, state_code=EXCLUDED.state_code,
+                        country=EXCLUDED.country, country_code=EXCLUDED.country_code,
+                        tv_market=EXCLUDED.tv_market, venue_group=EXCLUDED.venue_group,
                         venue_mb_id=EXCLUDED.venue_mb_id, rentrak_id=EXCLUDED.rentrak_id,
-                        buyer=EXCLUDED.buyer, last_updated=EXCLUDED.last_updated
+                        buyer=EXCLUDED.buyer, angel_booker=EXCLUDED.angel_booker,
+                        last_updated=EXCLUDED.last_updated
                 """, args)
             else:
                 cur.execute(f"""
                     INSERT INTO master_list
-                        (unit_id, venue_name, exhibitor, city, state, country,
-                         venue_mb_id, rentrak_id, buyer, last_updated)
-                    VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+                        (unit_id, venue_name, exhibitor, exhibitor_ref_id, city, state, state_code,
+                         country, country_code, tv_market, venue_group, venue_mb_id,
+                         rentrak_id, buyer, angel_booker, last_updated)
+                    VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
                     ON CONFLICT(unit_id) DO UPDATE SET
                         venue_name=excluded.venue_name, exhibitor=excluded.exhibitor,
-                        city=excluded.city, state=excluded.state,
+                        exhibitor_ref_id=excluded.exhibitor_ref_id,
+                        city=excluded.city, state=excluded.state, state_code=excluded.state_code,
+                        country=excluded.country, country_code=excluded.country_code,
+                        tv_market=excluded.tv_market, venue_group=excluded.venue_group,
                         venue_mb_id=excluded.venue_mb_id, rentrak_id=excluded.rentrak_id,
-                        buyer=excluded.buyer, last_updated=excluded.last_updated
+                        buyer=excluded.buyer, angel_booker=excluded.angel_booker,
+                        last_updated=excluded.last_updated
                 """, args)
+
+        # Write changelog
+        if changelog_rows:
+            cur.executemany(
+                f'INSERT INTO master_list_changelog (venue_mb_id, venue_name, field_name, old_value, new_value, changed_at) '
+                f'VALUES ({p},{p},{p},{p},{p},{p})',
+                changelog_rows
+            )
+
         conn.commit()
-        print(f'[db] Master list: upserted {len(rows)} rows')
+        print(f'[db] Master list: {inserted} inserted, {updated} updated, {skipped} unchanged/skipped')
+        return {'inserted': inserted, 'updated': updated, 'skipped': skipped}
     finally:
         conn.close()
 
@@ -453,6 +552,57 @@ def get_master_list_count() -> int:
         cur = conn.cursor()
         cur.execute('SELECT COUNT(*) FROM master_list')
         return cur.fetchone()[0]
+    finally:
+        conn.close()
+
+
+def get_master_list_changelog(limit: int = 100) -> list[dict]:
+    """Return recent master list changes, newest first."""
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT * FROM master_list_changelog ORDER BY changed_at DESC LIMIT ?', (limit,)
+        ) if not _IS_POSTGRES else cur.execute(
+            'SELECT * FROM master_list_changelog ORDER BY changed_at DESC LIMIT %s', (limit,)
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def migrate_master_list_schema():
+    """Add new columns to master_list if upgrading from old schema. Safe to run multiple times."""
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        new_cols = [
+            ('exhibitor_ref_id', "TEXT DEFAULT ''"),
+            ('state_code',       "TEXT DEFAULT ''"),
+            ('country_code',     "TEXT DEFAULT ''"),
+            ('tv_market',        "TEXT DEFAULT ''"),
+            ('venue_group',      "TEXT DEFAULT ''"),
+            ('angel_booker',     "TEXT DEFAULT ''"),
+        ]
+        for col, typedef in new_cols:
+            try:
+                cur.execute(f'ALTER TABLE master_list ADD COLUMN {col} {typedef}')
+            except Exception:
+                pass  # column already exists
+        # Create changelog table if missing
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS master_list_changelog (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                venue_mb_id TEXT NOT NULL,
+                venue_name  TEXT DEFAULT '',
+                field_name  TEXT NOT NULL,
+                old_value   TEXT DEFAULT '',
+                new_value   TEXT DEFAULT '',
+                changed_at  TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.commit()
+        print('[db] master_list schema migration complete')
     finally:
         conn.close()
 
