@@ -530,10 +530,10 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
                 if len(row_data) < n_cols:
                     row_data += [''] * (n_cols - len(row_data))
                 row = dict(zip(headers, row_data[:n_cols]))
-                # Blank action = holding over (Hold). Booking tab still books it (Hold is
-                # an active action); Holdover sets it to Hold, not Final. Explicit BOOK
-                # column means blank = skip, so guard on _book_action.
-                if row.get('Action', '') == '' and not _book_action:
+                # Blank action = holding over (Hold) for EVERY format, including explicit
+                # BOOK-column sheets — per Tommy, treat all blanks as Hold ("just in case"),
+                # never skip. Booking tab still books it (Hold is an active action).
+                if row.get('Action', '') == '':
                     row['Action'] = 'Hold'
                 # Strip "(City, ST)" from Theatre and populate City if missing
                 _th_val = row.get('Theatre', '')
@@ -553,8 +553,8 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
                 if len(chunk) < n_cols:
                     chunk += [''] * (n_cols - len(chunk))
                 row = dict(zip(headers, chunk))
-                if row.get('Action', '') == '' and not _book_action:
-                    row['Action'] = 'Hold'  # blank = holding over (was Final)
+                if row.get('Action', '') == '':
+                    row['Action'] = 'Hold'  # blank = holding over (all blanks Hold)
                 rows.append(row)
             return rows
 
