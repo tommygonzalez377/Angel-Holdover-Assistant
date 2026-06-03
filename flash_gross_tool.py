@@ -557,9 +557,14 @@ def _parse_one_per_line(raw: str):
         _th_off_fgt = _headers_fgt.index(_th_col_fgt) if _th_col_fgt is not None else None
         _THEATRE_RE_FGT = _re.compile(r'\([^)]*,\s*[A-Z]{2}\)', _re.IGNORECASE)
 
-        if _th_off_fgt is not None and _blank_count == 0:
-            # No blank separators → variable-length rows; anchor on Theatre "(City, ST)"
-            _th_pos_list = [_j for _j, _v2 in enumerate(_data_fgt) if _THEATRE_RE_FGT.search(_v2)]
+        _th_pos_list = ([_j for _j, _v2 in enumerate(_data_fgt) if _THEATRE_RE_FGT.search(_v2)]
+                        if _th_off_fgt is not None else [])
+        if _th_pos_list:
+            # Anchor each row on its Theatre "(City, ST)" value — robust regardless of
+            # whether the blank Action header cell arrived as a space line (_blank_count>=1)
+            # or an empty line. The old gate (_blank_count==0) sent space-line pastes into
+            # fixed-chunking, which misaligned rows and dropped most theatres (only ~4 of 27
+            # survived to the Comscore pull).
             _rows_fgt = []
             for _idx, _th_p in enumerate(_th_pos_list):
                 _rs = _th_p - _th_off_fgt
@@ -1087,6 +1092,33 @@ def load_final_locations(csv_path: str) -> list[dict]:
             df = pd.DataFrame(_amc_rows)
             print(f"  [AMC format] parsed {len(df)} theatres", flush=True)
 
+    # 3.7. Kaufman/Malco 5-line block format.
+    # Each venue = 5 non-empty lines: CITY ST / VENUE / DISTRIBUTOR / FILM / F|H [modifier]
+    # Handles blank lines between venues, between every field, or no blank lines.
+    if df is None:
+        _kauf_status_re = re.compile(r'^[FH](\s+\S.*)?$', re.IGNORECASE)
+        _kauf_nonempty = [l.strip() for l in raw.splitlines() if l.strip()]
+        if (len(_kauf_nonempty) >= 5
+                and len(_kauf_nonempty) % 5 == 0
+                and sum(1 for i in range(4, len(_kauf_nonempty), 5)
+                        if _kauf_status_re.match(_kauf_nonempty[i]))
+                    >= max(2, len(_kauf_nonempty) // 5 * 0.8)):
+            _kauf_rows = []
+            for _ki in range(0, len(_kauf_nonempty), 5):
+                _blk = _kauf_nonempty[_ki:_ki+5]
+                _parts = _blk[0].split()
+                _city  = ' '.join(_parts[:-1]).title() if len(_parts) >= 2 else ''
+                _venue = _blk[1]
+                _film  = _blk[3] if len(_blk) > 3 else ''
+                _stat  = (_blk[4] if len(_blk) > 4 else _blk[-1]).upper()
+                _code  = _stat.split()[0]
+                _action = 'Final' if _code == 'F' and len(_stat.split()) == 1 else 'Hold'
+                _kauf_rows.append({'Theatre': _venue, 'Action': _action,
+                                   'City': _city, 'Film': _film})
+            if _kauf_rows:
+                df = pd.DataFrame(_kauf_rows)
+                print(f"  [kaufman] parsed {len(df)} rows from 5-line block format", flush=True)
+
     # 4. Last resort: pandas auto-detect
     if df is None:
         try:
@@ -1097,8 +1129,11 @@ def load_final_locations(csv_path: str) -> list[dict]:
                      "Make sure you copy the full table including the header row.")
 
     # Normalize column aliases → standard names
+    # "Theatre Name" / "Theater Name" (with space) — used by Tammy Flores, Glen Parham,
+    # and other circuit-first bookings: Circuit | Theatre Name | City | ST | Title | ...
     _COL_RENAME = {"policy": "Action", "status": "Action",
-                   "theater_name": "Theatre", "theatre_name": "Theatre"}
+                   "theater_name": "Theatre", "theatre_name": "Theatre",
+                   "theatre name": "Theatre", "theater name": "Theatre"}
     df = df.rename(columns={c: _COL_RENAME[c.lower()] for c in df.columns if c.lower() in _COL_RENAME})
 
     col = {c.lower(): c for c in df.columns}
@@ -1282,6 +1317,41 @@ VENUE_ALIASES: dict[str, str] = {
     "lincoln square cinema bistro 6":     "cinemark reserve lincoln square dine-in 6",
     "cinemark totem lake + xd":           "cinemark village at totem lake 8",
     "century walla walla grand cinema 12":"cinemark walla walla grand cinema12",
+    # ── Jeff Kaufman / Malco Theatres + Apex Cinemas ─────────────────────────
+    # Short Kaufman booking names → full master-list venue names
+    "cinema 12":               "malco olive branch cinema 12",
+    "cinema 12, olive branch": "malco olive branch cinema 12",
+    "southaven":               "malco desoto southaven 16",
+    "southaven, desoto":       "malco desoto southaven 16",
+    "collierville":            "malco towne collierville 16",
+    "stage":                   "malco stage cinema bartlett",
+    "stage, bartlett":         "malco stage cinema bartlett",
+    "forest hill":             "malco forest hill germantown 8",
+    "forest hill, germantown": "malco forest hill germantown 8",
+    "cordova":                 "malco cordova 16",
+    "cordova, memphis":        "malco cordova 16",
+    "paradiso":                "malco paradiso memphis 16",
+    "paradiso, memphis":       "malco paradiso memphis 16",
+    "grandview":               "malco grandview madison 17",
+    "grandview, madison":      "malco grandview madison 17",
+    "van buren":               "malco van buren cinema",
+    "van buren, van buren":    "malco van buren cinema",
+    "springdale":              "malco springdale cinema grill",
+    "springdale, springdale":  "malco springdale cinema grill",
+    "pinnacle hills":          "malco pinnacle hills rogers 12",
+    "pinnacle hills, rogers":  "malco pinnacle hills rogers 12",
+    "movies 9":                "malco cinema winchester 9",
+    "movies 9, winchester":    "malco cinema winchester 9",
+    "tup commons":             "malco tupelo commons 10",
+    "tup commons, tupelo":     "malco tupelo commons 10",
+    "malco cinema 8":          "malco columbus 8",
+    "malco cinema 8, columbus":"malco columbus 8",
+    "roxy":                    "roxy dickson 8",
+    "roxy, dickson":           "roxy dickson 8",
+    "epic":                    "apex muskogee 6",
+    "epic, muskogee":          "apex muskogee 6",
+    "ox commons":              "malco oxford commons 8",
+    "ox commons, oxford":      "malco oxford commons 8",
 }
 
 # Direct Rentrak ID overrides — booking name → {rentrak_id, venue}.
@@ -1317,6 +1387,8 @@ def _normalize_venue(name: str) -> str:
     n = re.sub(r'^(amc dine-in\s+theatres?|amc dine-in|amc star|amc classic|amc)\s+', '', n)
     n = re.sub(r'^(regal|cinemark|harkins|marcus|showcase|cineworld|amstar|b&b)\s+', '', n)
     n = re.sub(r'[^a-z0-9 ]', ' ', n)   # strip parentheses, commas, +, etc.
+    n = re.sub(r'\bstm\b', 'stadium', n)  # expand booking abbreviation
+    n = re.sub(r'\bctr\b', 'center', n)
     return re.sub(r'\s+', ' ', n).strip()
 
 
@@ -1660,7 +1732,7 @@ def scrape_all_films(page, rentrak_id: str, week_date: str, angel_title: str) ->
         # hidden "No data available" text that would cause an early exit otherwise.
         raw = {"headers": [], "rows": [], "valid_as_of": "", "no_data": False}
         import time as _time
-        _deadline = _time.time() + 90
+        _deadline = _time.time() + 60
         _last_row_count = -1
         while _time.time() < _deadline:
             snippet = page.evaluate("() => document.body.innerText.slice(0, 500)")

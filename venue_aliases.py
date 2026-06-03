@@ -493,6 +493,8 @@ CITY_VENUE_ALIASES: dict[str, str] = {
     "stone hill town center":               "Cinemark Stone Hill Town Ctr Pflugerville 9 *TEMP 5*",
     "cinemark 14, round rock":               "cinemark round rock 14",
     "cinemark san antonio 16, san antonio":  "cinemark movies san antonio 16",
+    "cinemark hill country galleria 14, bee cave": "Cinemark Hill Country Bee Cave 14",
+    "cinemark mccreless mall 10, san antonio":     "Cinemark Mccreless San Antonio 10",
     "southpark meadows 14, austin":          "cinemark southpark mall austin 14",
     "southpark meadows 14":                  "cinemark southpark mall austin 14",
     "movies 8, del rio":                     "cinemark movies del rio 8",

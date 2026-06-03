@@ -799,6 +799,8 @@ def _do_seed_aliases():
         ('studio city foothills',              '',              'studio city foothills gillette 6',                 ''),
         ('studio city uw plaza',               '',              'studio city uw',                                   ''),
         # ── Synced from venue_aliases.py CITY_VENUE_ALIASES (2026-06-03) ──
+        ('cinemark hill country galleria 14', 'bee cave', 'Cinemark Hill Country Bee Cave 14', 'Cinemark'),
+        ('cinemark mccreless mall 10', 'san antonio', 'Cinemark Mccreless San Antonio 10', 'Cinemark'),
         ('309 cinema 9', '', 'AMC 309 Cinemas North Wales 9', 'AMC'),
         ('aberdeen', '', 'Golden Ticket Cinemas Aberdeen 5', ''),
         ('academy 8', '', 'AMC Academy Greenbelt 8', 'AMC'),
