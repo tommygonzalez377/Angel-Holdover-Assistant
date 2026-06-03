@@ -282,6 +282,16 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
             _snake_headers.append(_SNAKE_MAP.get(values[_si].lower(), values[_si]))
             _si += 1
         _n_sn = len(_snake_headers)
+        # Detect unnamed blank status column (e.g. space-only header line like Kathy Disabato's format)
+        _n_seen = 0
+        for _cj, _cv in enumerate(cell_values):
+            if _cv:
+                _n_seen += 1
+                if _n_seen == _si:
+                    if _cj + 1 < len(cell_values) and cell_values[_cj + 1] == '':
+                        _snake_headers.append('Action')
+                        _n_sn = len(_snake_headers)
+                    break
         _data_sn = values[_si:]
         rows = []
         for _sj in range(0, len(_data_sn), _n_sn):
@@ -373,7 +383,10 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
                 elif 'hold' in _al:
                     _act = 'Hold'
                 else:
-                    continue
+                    # Keep non-Final/Hold rows (e.g. "Open") instead of dropping them.
+                    # The Holdover Assistant only acts on Final/Hold so it ignores these
+                    # exactly as before; the Booking Assistant needs them to book.
+                    _act = _sta.strip().title() or 'Open'
                 rows.append({'Theatre': _th, 'DMA': _dma, 'City': _city,
                              'Film': _ttl, 'Action': _act, 'Terms': _dtl})
         return rows
@@ -386,8 +399,14 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
             and values[0].lower() in ('theatre #', 'theater #')
             and values[2].lower() == 'city'
             and values[3].lower() == 'st'):
+        # Header cells run until the first 3+ digit unit number. Cols 0-5 are fixed
+        # (Unit/Theatre/City/State/Screens/DMA); a 7th header, if present, is the film
+        # title (ComScore "Theatre #" bookings carry the film as the last column header).
+        _hdr_end_csc = next((_i for _i, _v in enumerate(cell_values)
+                             if _re.fullmatch(r'\d{3,}', _v)), len(cell_values))
+        _film_hdr_csc = cell_values[6] if _hdr_end_csc > 6 else ''
         _hdrs_csc = ['Unit', 'Theatre', 'City', 'State', 'Screens', 'DMA', 'Action']
-        _data_csc = cell_values[6:]   # skip 6 explicit header lines
+        _data_csc = cell_values[_hdr_end_csc:]   # skip header lines (6 or 7)
         # Each row is anchored by a 3+ digit unit number
         _id_pos_csc = [_i for _i, _v in enumerate(_data_csc)
                        if _re.fullmatch(r'\d{3,}', _v)]
@@ -404,7 +423,7 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
             _al_csc = _d_csc['Action'].lower()
             _act_csc = 'Hold' if 'hold' in _al_csc else 'Final'
             rows.append({'Theatre': _th_csc, 'Unit': _d_csc['Unit'],
-                         'City': _d_csc['City'], 'Action': _act_csc, 'Film': ''})
+                         'City': _d_csc['City'], 'Action': _act_csc, 'Film': _film_hdr_csc})
         return rows
 
     # ── Landmark "Location" format: 2-column (Theatre / Status) ────────────────
@@ -490,9 +509,14 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
         _th_off   = headers.index(_th_col) if _th_col is not None else None
         _THEATRE_RE = _re.compile(r'\([^)]*,\s*[A-Z]{2}\)', _re.IGNORECASE)
 
-        if _th_off is not None and blank_count == 0:
-            # No blank separators → variable-length rows; anchor on Theatre "(City, ST)"
-            th_positions = [j for j, v in enumerate(data_vals) if _THEATRE_RE.search(v)]
+        th_positions = ([j for j, v in enumerate(data_vals) if _THEATRE_RE.search(v)]
+                        if _th_off is not None else [])
+        if th_positions:
+            # Anchor each row on its Theatre "(City, ST)" value — robust to variable-length
+            # rows AND to whether the blank Action header cell arrived as a space line
+            # (blank_count>=1) or an empty line. The old gate (blank_count==0) sent
+            # space-line pastes into fixed-chunking, which retained "(City, ST)" and
+            # misaligned columns (buyer/DMA/action leaked in as theatre names).
             rows = []
             for idx, th_pos in enumerate(th_positions):
                 row_start = th_pos - _th_off
@@ -560,7 +584,7 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
     if action_idx is None:
         return []
     # Skip any leading non-column values (e.g. "Angel Studios Inc.")
-    KNOWN_COLS = {"buyer","br","unit","theatre","theater","attraction","film","title","type","media","prt"}
+    KNOWN_COLS = {"buyer","br","unit","theatre","theater","attraction","film","title","type","media","prt","comscore #","comscore"}
     header_start = 0
     for i in range(action_idx + 1):
         if values[i].lower() in KNOWN_COLS:
@@ -606,6 +630,122 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
     return rows
 
 
+# ---------------------------------------------------------------------------
+# Jeff Kaufman / Malco booking format parser
+# ---------------------------------------------------------------------------
+# Format: blank-line-separated 5-line blocks:
+#   Line 0: CITY   STATE
+#   Line 1: VENUE NAME
+#   Line 2: DISTRIBUTOR (e.g. ANGEL)
+#   Line 3: FILM TITLE
+#   Line 4: STATUS [MODIFIER]  — F=Final, H=Hold, F TU=Hold+finals-Tuesday
+# ---------------------------------------------------------------------------
+
+_KAUFMAN_STATUS_PAT = re.compile(r'^[FH](\s+\S.*)?$', re.IGNORECASE)
+
+def _is_kaufman_format(lines: list[str]) -> bool:
+    """Return True if text looks like Kaufman 5-line block format.
+    Works whether or not blank lines separate the blocks."""
+    # Case 1: blank-line-separated blocks
+    blocks, cur = [], []
+    for l in lines:
+        s = l.strip()
+        if s:
+            cur.append(s)
+        elif cur:
+            blocks.append(cur); cur = []
+    if cur:
+        blocks.append(cur)
+    if len(blocks) >= 2:
+        matches = sum(1 for b in blocks if len(b) >= 4 and _KAUFMAN_STATUS_PAT.match(b[-1]))
+        if matches >= 2:
+            return True
+    # Case 2: no blank lines — every 5th non-empty line (offset 4) matches F/H
+    nonempty = [l.strip() for l in lines if l.strip()]
+    if len(nonempty) >= 10 and len(nonempty) % 5 == 0:
+        status_lines = [nonempty[i] for i in range(4, len(nonempty), 5)]
+        matches = sum(1 for s in status_lines if _KAUFMAN_STATUS_PAT.match(s))
+        if matches >= max(2, len(status_lines) * 0.8):
+            return True
+    return False
+
+
+def _parse_kaufman_booking(lines: list[str]) -> list[dict]:
+    """
+    Parse Jeff Kaufman / Malco 5-line block booking format.
+    Returns list of {theatre, city, state, action, film, phrase, screening_type, playday_modifier}.
+    """
+    # Split into blocks — handle both blank-line-separated and no-blank-lines cases
+    blocks, cur = [], []
+    for l in lines:
+        s = l.strip()
+        if s:
+            cur.append(s)
+        elif cur:
+            blocks.append(cur); cur = []
+    if cur:
+        blocks.append(cur)
+
+    # If only 1 block (no blank lines), split into 5-line sub-blocks
+    if len(blocks) == 1 and len(blocks[0]) >= 10 and len(blocks[0]) % 5 == 0:
+        flat = blocks[0]
+        blocks = [flat[i:i+5] for i in range(0, len(flat), 5)]
+    # If every "block" is a single line (blank lines between every field, not just between venues),
+    # collect all non-empty lines and chunk into 5-line sub-blocks
+    elif len(blocks) >= 5 and all(len(b) == 1 for b in blocks):
+        nonempty = [b[0] for b in blocks]
+        n5 = (len(nonempty) // 5) * 5          # round down to nearest multiple of 5
+        blocks = [nonempty[i:i+5] for i in range(0, n5, 5)]
+
+    results = []
+    for block in blocks:
+        if len(block) < 4:
+            continue
+
+        # Line 0: CITY   STATE  (last token = state abbreviation)
+        parts = block[0].split()
+        if len(parts) < 2:
+            continue
+        state = parts[-1]
+        city  = ' '.join(parts[:-1]).title()
+
+        venue = block[1]                               # Line 1: venue name
+        # Line 2: distributor (skip)
+        film  = block[3] if len(block) > 3 else ""    # Line 3: film title
+
+        # Line 4 (or last line): STATUS [MODIFIER]
+        status_line = (block[4] if len(block) > 4 else block[-1]).strip().upper()
+        if not _KAUFMAN_STATUS_PAT.match(status_line):
+            continue
+
+        parts2   = status_line.split(None, 1)
+        code     = parts2[0]                                  # "F" or "H"
+        modifier = parts2[1].strip().lower() if len(parts2) > 1 else None  # "tu", "weekends only", etc.
+
+        # F TU = Hold status (still playing, finals on Tuesday — uncheck We/Th)
+        # F    = Final status, all 7 days
+        # H    = Hold status, all 7 days
+        if code == 'F' and modifier is None:
+            action = 'Final'
+        else:
+            action = 'Hold'   # H, or F with modifier (e.g. F TU)
+
+        results.append({
+            'theatre':        venue,
+            'city':           city,
+            'state':          state,
+            'action':         action,
+            'film':           film,
+            'phrase':         status_line,
+            'screening_type': None,       # Kaufman format has no screening type
+            'playday_modifier': modifier, # None = all 7 days; else key into _PLAYDAY_MAP
+        })
+        log(f"  [kaufman] {venue} / {city} → {action}"
+            + (f" [mod:{modifier}]" if modifier else ""))
+
+    return results
+
+
 def parse_booking_csv(path: Path) -> list[dict]:
     """
     Parse booking CSV → list of {theatre, action, phrase, screening_type}.
@@ -615,6 +755,11 @@ def parse_booking_csv(path: Path) -> list[dict]:
     try:
         with open(path, newline="", encoding="utf-8-sig") as f:
             lines = f.readlines()
+
+        # ── Jeff Kaufman / Malco 5-line block format ──────────────────────────
+        if _is_kaufman_format(lines):
+            log("  [parse] Detected Kaufman/Malco 5-line block format")
+            return _parse_kaufman_booking(lines)
 
         import io, re as _re_pbc
         # Detect Cinemark __COLUMN__ format (may have preamble before headers)
@@ -630,7 +775,7 @@ def parse_booking_csv(path: Path) -> list[dict]:
         elif not _is_dunder_fmt:
             # Skip title rows — find first line with a known column name
             HEADER_KEYS = {"theatre", "theater", "buyer", "film", "attraction",
-                           "action", "unit", "dma_name", "status", "dma"}
+                           "action", "unit", "dma_name", "status", "dma", "comscore"}
             header_idx = 0
             for i, line in enumerate(lines[:10]):
                 # Split on whitespace/comma/tab so "dma" inside "landmark" doesn't fire
@@ -847,7 +992,12 @@ def parse_booking_csv(path: Path) -> list[dict]:
                     _seen_opl[_hl] = 0
                     _deduped_opl.append(_h)
             _INFO_COLS_OPL = {'theater #', 'theatre #', 'name (city, state)', 'dma',
-                               'screens', 'contact', 'chain', 'circuit', 'branch'}
+                               'screens', 'contact', 'chain', 'circuit', 'branch',
+                               # ComScore booking format (Jennifer Hernandez & similar):
+                               # headers include 'ComScore Name, City, State' / 'City' / 'ST'
+                               # alongside the standard ones. Without these, the parser
+                               # mis-treats every column as a film and cascades to Hold.
+                               'comscore name, city, state', 'city', 'st', 'state'}
             _film_idxs_opl = [i for i, h in enumerate(_deduped_opl)
                                if h.split('.')[0].strip().lower() not in _INFO_COLS_OPL]
             log(f"  [1b-opl-mica] preamble={_preamble_films_opl} film_idxs={_film_idxs_opl} headers={_deduped_opl}")
@@ -864,19 +1014,41 @@ def parse_booking_csv(path: Path) -> list[dict]:
                 if not _theatre_opl:
                     continue
                 for _fi, _ci in enumerate(_film_idxs_opl):
-                    _val_opl = _row_opl[_ci].strip().lower() if _ci < len(_row_opl) else ""
-                    _film_opl = _preamble_films_opl[_fi] if _fi < len(_preamble_films_opl) else ""
-                    if _val_opl == 'final':
+                    # Use the RAW value (case preserved) for need-keys date extraction,
+                    # but lowercase a copy for the final/hold/etc. classifier.
+                    _raw_val_opl = _row_opl[_ci].strip() if _ci < len(_row_opl) else ""
+                    _val_opl = _raw_val_opl.lower()
+                    _film_opl = _preamble_films_opl[_fi] if _fi < len(_preamble_films_opl) else (
+                        _deduped_opl[_ci].split('.')[0] if _ci < len(_deduped_opl) else ""
+                    )
+                    # "Need keys for a group on MM/DD" → Hold + single-day playday modifier.
+                    # Handles "final but need keys ..." (which would otherwise be Final) and
+                    # bare "need keys ..." (which would otherwise be Hold without modifier).
+                    _playday_mod_opl = None
+                    _nk_match_opl = _NEED_KEYS_PAT.search(_raw_val_opl)
+                    if _nk_match_opl:
+                        _nk_date_opl = _nk_match_opl.group(1)
+                        _a_opl, _playday_mod_opl = _keys_date_to_status_and_modifier(_nk_date_opl)
+                        log(f"  [playday] {_theatre_opl}: 'need keys on {_nk_date_opl}' → status={_a_opl}"
+                            + (f", modifier='{_playday_mod_opl}'" if _playday_mod_opl else " (Thursday — regular Final)"))
+                    elif _val_opl == 'final':
                         _a_opl = 'Final'
-                    elif _val_opl and _val_opl not in ('-',):
-                        _a_opl = 'Hold'   # "clean" = clean hold
-                    else:
+                    elif _val_opl in ('-',):
+                        # Explicit dash = not booked for this contact this week — skip
                         continue
+                    else:
+                        # Everything else (including BLANK action) = Hold for this contact.
+                        # Per Tommy 2026-06-01: in ComScore Theatre # format (Jennifer Hernandez
+                        # & similar), a blank action cell means the venue is still holding for
+                        # this contact this week — NOT "no booking, skip". Previously we skipped,
+                        # which left 8 valid Hold venues sitting at "To Do" in Mica.
+                        _a_opl = 'Hold'   # "clean" / blank / other text all map to Hold
                     _phrase_opl = "" if _val_opl in ('final', 'clean') else _val_opl
                     _st_opl = get_screening_type(_phrase_opl) if _a_opl == 'Hold' else None
                     results.append({"theatre": _theatre_opl, "city": _city_opl,
                                     "action": _a_opl, "film": _film_opl,
-                                    "phrase": _phrase_opl, "screening_type": _st_opl})
+                                    "phrase": _phrase_opl, "screening_type": _st_opl,
+                                    "playday_modifier": _playday_mod_opl})
             log(f"  [1b-opl-mica] parsed {len(results)} results")
             return results
         # ── End Cinemark Theater # one-per-line ───────────────────────────────
@@ -1448,6 +1620,7 @@ def parse_booking_csv(path: Path) -> list[dict]:
         if not action_col:
             log("  WARNING: Could not find action column — tried: action, status, policy, booking type, type")
 
+        _DATE_IN_ACTION = re.compile(r'(\d{1,2}/\d{1,2})')
         for row in reader:
             theatre = (row.get(theatre_col) or "").strip() if theatre_col else ""
             action  = (row.get(action_col)  or "").strip() if action_col  else ""
@@ -1459,7 +1632,21 @@ def parse_booking_csv(path: Path) -> list[dict]:
                 continue
 
             al = action.lower()
-            if "final" in al:
+            # ── "Need keys for a group on MM/DD" detection (Jennifer Hernandez & Regal) ──
+            # Must run BEFORE the standard final/hold branch because:
+            #   - "final but need keys for a group on 5/15" contains "final" but
+            #     should be treated as Hold + single-day, not Final.
+            #   - "need keys for a group on 5/15" (no "final"/"hold") would otherwise
+            #     fall through to `continue` and be skipped entirely.
+            playday_mod = None
+            _nk_match = _NEED_KEYS_PAT.search(action)
+            if _nk_match:
+                _date_str = _nk_match.group(1)
+                a, _nk_mod = _keys_date_to_status_and_modifier(_date_str)
+                playday_mod = _nk_mod
+                log(f"  [playday] {theatre}: 'need keys on {_date_str}' → status={a}"
+                    + (f", modifier='{playday_mod}'" if playday_mod else " (Thursday — regular Final)"))
+            elif "final" in al:
                 a = "Final"
             elif "hold" in al:
                 a = "Hold"
@@ -1468,13 +1655,23 @@ def parse_booking_csv(path: Path) -> list[dict]:
 
             st = get_screening_type(phrase or action) if a == "Hold" else None
 
+            # Extract playday modifier from "FINAL MM/DD" style actions (e.g. Harkins).
+            # Skip if we already set a modifier via the need-keys path above.
+            if a == "Final" and playday_mod is None:
+                _dm = _DATE_IN_ACTION.search(action)
+                if _dm:
+                    playday_mod = _final_date_to_playday_modifier(_dm.group(1))
+                    if playday_mod:
+                        log(f"  [playday] {theatre}: FINAL {_dm.group(1)} → modifier '{playday_mod}'")
+
             results.append({
-                "theatre":        theatre,
-                "city":           city,
-                "action":         a,
-                "film":           film,
-                "phrase":         phrase,
-                "screening_type": st,  # None = default Clean, no update needed
+                "theatre":          theatre,
+                "city":             city,
+                "action":           a,
+                "film":             film,
+                "phrase":           phrase,
+                "screening_type":   st,  # None = default Clean, no update needed
+                "playday_modifier": playday_mod,
             })
 
     except Exception as e:
@@ -1495,10 +1692,20 @@ def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo", filt
     _active_mica_url  = mica_url
     _active_auth_file = auth_file
     # Apply booking-name aliases before any processing
+    # Normalize multiple spaces → single space so "RAZORBACK  16" matches alias "razorback 16"
+    # Also pre-resolve city-qualified aliases (e.g. "CINEMA 12" + city "Olive Branch" →
+    # "Malco Olive Branch Cinema 12") so the resolved name is used for dedup, logging, and JS search.
     for t in theatres:
-        key = t["theatre"].lower().strip()
+        t["theatre"] = ' '.join(t["theatre"].split())  # normalize whitespace in name itself
+        key = t["theatre"].lower()
         if key in VENUE_ALIASES:
             t["theatre"] = VENUE_ALIASES[key]
+        else:
+            # Pre-resolve city alias here so resolved name flows through all subsequent steps
+            resolved = _apply_city_alias(t["theatre"], t.get("city", ""))
+            if resolved != t["theatre"]:
+                log(f"  [alias] '{t['theatre']}' + city '{t.get('city','')}' → '{resolved}'")
+                t["theatre"] = resolved
 
     finals = [t for t in theatres if t["action"] == "Final"]
     holds  = [t for t in theatres if t["action"] == "Hold"]
@@ -1618,13 +1825,21 @@ def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo", filt
                 else:
                     log(f"  Status -> Final  OK ({n} rows)")
 
-            # ---------- Holds (one row at a time: status → screening type) ----------
+                # Playday modifiers for Finals (rare — only if booking specifies)
+                for t in finals:
+                    mod = t.get("playday_modifier")
+                    if mod:
+                        entry = [{"theatre": t["theatre"], "film": t.get("film",""), "city": t.get("city","")}]
+                        _set_playdays_per_row(page, entry, mod, contact=contact)
+
+            # ---------- Holds (one row at a time: status → screening type → playdays) ----------
             if holds:
                 log(f"\n--- Holds ({len(holds)}) ---")
                 for t in holds:
                     film_label = f"  [{t['film']}]" if t.get("film") else ""
                     label = t["screening_type"] or "Clean"
-                    log(f"  {t['theatre']}{film_label}  [{t['phrase']}]  -> {label}")
+                    mod_label = f"  [days:{t['playday_modifier']}]" if t.get("playday_modifier") else ""
+                    log(f"  {t['theatre']}{film_label}  [{t['phrase']}]  -> {label}{mod_label}")
 
                 hold_updated = 0
                 for t in holds:
@@ -1632,8 +1847,13 @@ def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo", filt
                     n = _set_status_per_row(page, entry, "Hold", contact=contact)
                     if n > 0:
                         hold_updated += n
-                        if t["screening_type"]:
-                            _set_screening_type_per_row(page, entry, t["screening_type"], contact=contact)
+                        st = t["screening_type"]  # None = default Clean — no Bulk Change needed
+                        if st:
+                            _set_screening_type_per_row(page, entry, st, contact=contact)
+                        # Apply playday modifier if present (e.g. F TU → uncheck We/Th)
+                        mod = t.get("playday_modifier")
+                        if mod:
+                            _set_playdays_per_row(page, entry, mod, contact=contact)
                 if hold_updated == 0:
                     log("  WARNING: No matching rows updated for Holds")
                 else:
@@ -1964,12 +2184,23 @@ def _apply_filters(page, contact: str, filter_type: str = "contact_person"):
     page.wait_for_timeout(800)
     _screenshot(page, "mica_filter_modal.png")
 
-    # Wait for the modal to appear
+    # Wait for the modal to appear. If it never appears (often because the browser
+    # is starved during a parallel Comscore scrape), we MUST hard-fail — otherwise
+    # the script proceeds with no contact filter applied, scans every holdover row
+    # in the system (~100+), and silently does nothing while still printing
+    # "Mica update complete!". Better to error loudly so the user can re-run.
     try:
         page.wait_for_selector('[role="dialog"], .modal-content, .modal', timeout=5_000)
     except PlaywrightTimeout:
-        log("  WARNING: Filter modal did not appear after clicking '+ Add'")
-        return
+        log("  ERROR: Filter modal did not appear after clicking '+ Add'.")
+        log("  This often happens when the browser is overloaded (e.g. a Comscore")
+        log("  pull is running in parallel and competing for resources).")
+        log("  Aborting so we don't update random rows. Please re-run Update Mica")
+        log("  after the Comscore pull finishes, or wait a moment and try again.")
+        raise RuntimeError(
+            "Filter modal did not open — aborting to avoid updating wrong rows. "
+            "Re-run after Comscore pull finishes (or wait a moment and retry)."
+        )
 
     # Wait for ng-select elements inside the modal to fully render
     try:
@@ -2233,28 +2464,47 @@ def _click_bulk_change(page) -> bool:
 
     # Only match elements whose trimmed text STARTS WITH "Bulk Change" to avoid
     # accidentally clicking "Bulk updates" or other Bulk-prefixed buttons.
-    clicked = False
-    for sel in [
-        'button:has-text("Bulk Change")',
-        'a:has-text("Bulk Change")',
-        '[role="button"]:has-text("Bulk Change")',
-    ]:
-        candidates = page.locator(sel).all()
-        for btn in candidates:
-            try:
-                txt = btn.text_content() or ""
-                if txt.strip().lower().startswith("bulk change"):
-                    btn.click()
-                    clicked = True
-                    break
-            except Exception:
-                continue
-        if clicked:
-            break
+    # Use JS-based click first (bypasses Playwright actionability checks that can hang
+    # on dynamic buttons like "Bulk Change (1)" with re-render on selection state change).
+    clicked = page.evaluate("""
+        () => {
+            const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+            for (const b of candidates) {
+                const t = (b.textContent || '').trim().toLowerCase();
+                if (/^bulk\\s*change/.test(t)) {
+                    b.click();
+                    b.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    return 'js_clicked:' + (b.textContent || '').trim().slice(0, 40);
+                }
+            }
+            return null;
+        }
+    """)
+
+    # Fallback to Playwright click with force=True if JS click didn't find the button
+    if not clicked:
+        for sel in [
+            'button:has-text("Bulk Change")',
+            'a:has-text("Bulk Change")',
+            '[role="button"]:has-text("Bulk Change")',
+        ]:
+            candidates = page.locator(sel).all()
+            for btn in candidates:
+                try:
+                    txt = btn.text_content() or ""
+                    if txt.strip().lower().startswith("bulk change"):
+                        btn.click(force=True, timeout=5_000)
+                        clicked = "pw_clicked"
+                        break
+                except Exception:
+                    continue
+            if clicked:
+                break
 
     if not clicked:
         log("  WARNING: Bulk Change button not found")
         return False
+    log(f"  Bulk Change clicked: {clicked}")
 
     # Verify the Bulk Change modal actually opened
     try:
@@ -2477,407 +2727,285 @@ def _bulk_set_screening_type(page, screening_type: str, contact: str = ""):
     _dismiss_any_dialog(page)
 
 
+def _bulk_set_playdays(page, active_days: list[str], contact: str = ""):
+    """
+    Bulk Change → check "Playdays" checkbox → toggle day buttons to match active_days → Apply.
+
+    Bulk Change modal structure (from observed UI):
+      [checkbox]  Playdays   [Fr] [Sa] [Su] [Mo] [Tu] [We] [Th]
+    The day buttons are disabled until the Playdays parent checkbox is checked.
+    active_days is a list like ['Fr','Sa','Su','Mo','Tu'] — those days will be ON; others OFF.
+    """
+    _ensure_holdovers_page(page, contact)
+    if not _click_bulk_change(page):
+        return
+    try:
+        page.wait_for_selector('[role="dialog"]', timeout=5_000)
+    except PlaywrightTimeout:
+        pass
+    page.wait_for_timeout(600)
+
+    # Step 0: If a "pending changes" confirmation dialog appeared (with "Apply Changes" /
+    # "Ignore Changes" / "Cancel" buttons), click "Apply Changes" to commit pending status
+    # updates, then re-click Bulk Change to open the actual form modal.
+    confirm_handled = page.evaluate("""
+        () => {
+            const dialogs = Array.from(document.querySelectorAll('[role="dialog"], .modal-content'));
+            for (const d of dialogs) {
+                const text = (d.textContent || '').toLowerCase();
+                // Detect the confirmation dialog by its unique buttons
+                if (/ignore\\s+changes/.test(text) && /apply\\s+changes/.test(text)) {
+                    // Click "Apply Changes" to commit pending changes
+                    const btns = Array.from(d.querySelectorAll('button, a, [role="button"]'));
+                    for (const b of btns) {
+                        const t = (b.textContent || '').trim().toLowerCase();
+                        if (t === 'apply changes' || /^apply\\s+changes$/.test(t)) {
+                            b.click();
+                            b.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                            return 'apply_changes_clicked';
+                        }
+                    }
+                    return 'apply_changes_btn_not_found';
+                }
+            }
+            return 'no_confirm_dialog';
+        }
+    """)
+    if confirm_handled == 'apply_changes_clicked':
+        log("  Confirmation dialog: clicked 'Apply Changes' to commit pending status changes")
+        page.wait_for_timeout(1500)  # let pending changes save and dialog close
+        # Re-open Bulk Change to get the actual form modal
+        if not _click_bulk_change(page):
+            log("  WARNING: Could not re-open Bulk Change after Apply Changes")
+            return
+        try:
+            page.wait_for_selector('[role="dialog"]', timeout=5_000)
+        except PlaywrightTimeout:
+            pass
+        page.wait_for_timeout(800)
+    elif confirm_handled and confirm_handled != 'no_confirm_dialog':
+        log(f"  Confirmation dialog: {confirm_handled}")
+
+    # Step 1: Find the "Playdays" parent checkbox and click it to enable.
+    # Use the LAST visible role=dialog (in case prior dialogs are still in DOM)
+    # and also search outside [role=dialog] since some modal frameworks use .modal-body etc.
+    cb_result = page.evaluate("""
+        () => {
+            // Pick the most-recently-opened visible dialog
+            const dialogs = Array.from(document.querySelectorAll('[role="dialog"], .modal-content, .modal-dialog, .modal'));
+            let modal = null;
+            for (let i = dialogs.length - 1; i >= 0; i--) {
+                const d = dialogs[i];
+                const rect = d.getBoundingClientRect();
+                if (rect.width > 50 && rect.height > 50) { modal = d; break; }
+            }
+            if (!modal) modal = dialogs[dialogs.length - 1] || null;
+            if (!modal) return 'no_modal';
+
+            function clickCb(cb) {
+                if (!cb.checked) {
+                    cb.click();
+                    cb.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    cb.dispatchEvent(new Event('change', {bubbles: true}));
+                }
+            }
+
+            // Strategy A: find each checkbox, check if its container mentions "Playday"
+            const checkboxes = Array.from(modal.querySelectorAll('input[type="checkbox"]'));
+            for (const cb of checkboxes) {
+                let container = cb.parentElement;
+                for (let i = 0; i < 8 && container && container !== modal; i++) {
+                    const txt = container.innerText || container.textContent || '';
+                    if (/playday/i.test(txt)) {
+                        clickCb(cb);
+                        return 'strat_a_clicked';
+                    }
+                    container = container.parentElement;
+                }
+            }
+
+            // Strategy B: TreeWalker finds "Playday" text node, walks up for checkbox
+            const walker = document.createTreeWalker(modal, NodeFilter.SHOW_TEXT, null);
+            let textNode;
+            while ((textNode = walker.nextNode())) {
+                if (/playday/i.test(textNode.textContent)) {
+                    let el = textNode.parentElement;
+                    for (let i = 0; i < 10 && el && el !== modal; i++) {
+                        const cb = el.querySelector('input[type="checkbox"]');
+                        if (cb) { clickCb(cb); return 'strat_b_clicked'; }
+                        el = el.parentElement;
+                    }
+                }
+            }
+
+            // Diagnostics: capture what IS in the modal so we can debug
+            const labels = Array.from(modal.querySelectorAll('label, h1, h2, h3, h4, h5, h6, .form-check-label, strong, span'))
+                .map(e => (e.textContent || '').trim())
+                .filter(t => t.length > 0 && t.length < 50)
+                .slice(0, 30);
+            const cbCount = checkboxes.length;
+            const tagSummary = {};
+            Array.from(modal.querySelectorAll('*')).forEach(e => {
+                const tag = e.tagName.toLowerCase();
+                tagSummary[tag] = (tagSummary[tag] || 0) + 1;
+            });
+            const hasPlaydayText = /playday/i.test(modal.textContent || '');
+            return 'playday_cb_not_found | cbs=' + cbCount +
+                ' | hasPlaydayText=' + hasPlaydayText +
+                ' | labels=[' + labels.join('|') + ']' +
+                ' | tags=' + Object.entries(tagSummary).filter(([k,v]) => v >= 2).map(([k,v]) => k+':'+v).join(',');
+        }
+    """)
+    log(f"  Playdays checkbox JS: {cb_result}")
+    page.wait_for_timeout(800)
+
+    # Step 2: Set each day button to its desired state.
+    # Mica uses Bootstrap toggle-buttons: <input type="checkbox" id="playdays__N-value">
+    # followed by <label class="btn playDay" for="playdays__N-value">Fr</label>.
+    # The label is what's visible/clickable; the input drives the actual checked state.
+    day_result = page.evaluate("""
+        (args) => {
+            const {activeDays} = args;
+            const ALL_DAYS = ['Fr','Sa','Su','Mo','Tu','We','Th'];
+            const wantSet = new Set(activeDays);
+
+            // Find day-toggle labels: scoped to elements inside an active MODAL container
+            // (the .playDay class exists in both the modal AND every inline row in the table,
+            // so we must filter by ancestor type).
+            function isVisible(el) {
+                if (!el) return false;
+                const rect = el.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0) return false;
+                const cs = window.getComputedStyle(el);
+                if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
+                return true;
+            }
+            function isInModal(el) {
+                return el.closest('[role="dialog"], .modal, .modal-content, .modal-body, .modal-dialog') !== null;
+            }
+            let dayLabels = Array.from(document.querySelectorAll('label.playDay, label.playday'))
+                .filter(l => isVisible(l) && isInModal(l));
+            if (dayLabels.length === 0) {
+                dayLabels = Array.from(document.querySelectorAll('label.btn')).filter(l =>
+                    ALL_DAYS.includes((l.textContent || '').trim()) && isVisible(l) && isInModal(l)
+                );
+            }
+            if (dayLabels.length === 0) {
+                dayLabels = Array.from(document.querySelectorAll('label')).filter(l =>
+                    ALL_DAYS.includes((l.textContent || '').trim()) && isVisible(l) && isInModal(l)
+                );
+            }
+
+            if (dayLabels.length === 0) {
+                // Global diagnostics: what .playDay elements exist anywhere?
+                const allPlayDay = document.querySelectorAll('label.playDay, label.playday, [class*="playDay" i]');
+                const visiblePlayDay = Array.from(allPlayDay).filter(isVisible).length;
+                const allLabelsWithDayText = Array.from(document.querySelectorAll('label'))
+                    .filter(l => ALL_DAYS.includes((l.textContent || '').trim()));
+                const visibleLabelsWithDayText = allLabelsWithDayText.filter(isVisible).length;
+                return ['no_day_buttons_anywhere' +
+                        ' | totalPlayDayClass=' + allPlayDay.length +
+                        ' | visiblePlayDayClass=' + visiblePlayDay +
+                        ' | totalLabelsWithDayText=' + allLabelsWithDayText.length +
+                        ' | visibleLabelsWithDayText=' + visibleLabelsWithDayText];
+            }
+
+            const corrections = [];
+            dayLabels.forEach(label => {
+                const day = (label.textContent || '').trim();
+                if (!ALL_DAYS.includes(day)) return;
+                // The associated checkbox drives state. Find via for-attribute or sibling input.
+                let checkbox = null;
+                const forId = label.getAttribute('for');
+                if (forId) checkbox = document.getElementById(forId);
+                if (!checkbox && label.previousElementSibling && label.previousElementSibling.tagName === 'INPUT') {
+                    checkbox = label.previousElementSibling;
+                }
+                if (!checkbox) checkbox = label.querySelector('input[type="checkbox"]');
+
+                const isSelected = checkbox ? checkbox.checked : false;
+                const shouldBe = wantSet.has(day);
+                if (shouldBe !== isSelected) {
+                    // Click the LABEL (visible element) to toggle Bootstrap btn-check
+                    label.click();
+                    label.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                    corrections.push(day + ':' + (shouldBe ? 'on' : 'off'));
+                } else {
+                    corrections.push(day + ':keep(' + (isSelected ? 'on' : 'off') + ')');
+                }
+            });
+            return corrections;
+        }
+    """, {"activeDays": active_days})
+    log(f"  Playdays days: {', '.join(day_result) if isinstance(day_result, list) else day_result}")
+    page.wait_for_timeout(400)
+
+    # Step 3: Click Apply (via JS — Playwright's click waits 30s on disabled buttons).
+    # If the Apply button is disabled (no changes were made), cancel the modal instead.
+    apply_result = page.evaluate("""
+        () => {
+            const dialogs = Array.from(document.querySelectorAll('[role="dialog"], .modal-content'));
+            if (dialogs.length === 0) return 'no_modal';
+            const modal = dialogs[dialogs.length - 1];
+            const btns = Array.from(modal.querySelectorAll('button, a, [role="button"]'));
+            // Try to click Apply / Apply Changes first
+            for (const b of btns) {
+                const t = (b.textContent || '').trim().toLowerCase();
+                if ((t === 'apply' || t === 'apply changes' || t === 'save') && !b.disabled) {
+                    b.click();
+                    b.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    return 'applied:' + t;
+                }
+            }
+            // Apply is disabled or missing — close the modal via Cancel
+            for (const b of btns) {
+                const t = (b.textContent || '').trim().toLowerCase();
+                if (t === 'cancel' || t === 'close') {
+                    b.click();
+                    b.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    return 'cancelled:apply_was_disabled';
+                }
+            }
+            return 'no_apply_or_cancel_button';
+        }
+    """)
+    if apply_result and apply_result.startswith("applied"):
+        log(f"  Applied Bulk Change → Playdays {active_days} [{apply_result}]")
+        page.wait_for_timeout(1500)
+    else:
+        log(f"  WARNING: Bulk Change Playdays not applied [{apply_result}]")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+        return
+
+    _dismiss_any_dialog(page)
+
+
 # ---------------------------------------------------------------------------
 # City+state → actual venue name for small-exhibitor "City, ST  HOLD" bookings.
 # Applied before _FIND_ONE_JS so the JS word-scorer can match by venue name.
 # ---------------------------------------------------------------------------
-_CITY_VENUE_ALIASES: dict[str, str] = {
-    # ── Cinemark DFW local-name → Mica master name ────────────────────────────
-    "cinemark central plano 10": "cinemark movies plano 10",
-    "cut! by cinemark":          "cinemark cut! 10",
-    "cinemark 17":               "cinemark 17 + imax",
-    "rave ridgmar 13":           "cinemark ridgmar mall 13 + xd",
-    "rave north east mall 18":   "cinemark northeast mall 18 + xd",
-    "cinemark cleburne":         "cinemark cinema cleburne 6",
-    "cinemark 12 and xd":        "cinemark mansfield 12 + xd",
-    "tinseltown grapevine and xd": "cinemark tinseltown grapevine 17 + xd",
-    "cinemark 17 + imax":          "cinemark tulsa 17",
-    # City-qualified (key = "booking name, city" — resolved before plain name)
-    "cinemark 14, cedar hill":   "cinemark cedar hill 14",
-    "movies 14, lancaster":      "cinemark movies lancaster 14",
-    "cinemark 14, denton":       "cinemark denton 14",
-    "cinemark 12, sherman":      "cinemark sherman 12",
-    "movies 8, paris":           "cinemark movies paris 8",
-    "cinemark west plano, plano":             "cinemark movies plano 10",
-    "cinemark west plano":                    "cinemark movies plano 10",
-    "cinemark (the legacy), plano":           "Cinemark Legacy 24 + XD",
-    "cinemark (the legacy)":                  "Cinemark Legacy 24 + XD",
-    "cinemark allen 16 and xd, allen":        "Cinemark Allen 16 + XD",
-    "cinemark allen 16 and xd":               "Cinemark Allen 16 + XD",
-    "cinemark roanoke 14, roanoke":           "Cinemark Roanoke 14 + XD",
-    "cinemark roanoke 14":                    "Cinemark Roanoke 14 + XD",
-    "cinemark rockwall 14 and xd, rockwall":  "Cinemark Rockwall 14 + XD",
-    "cinemark rockwall 14 and xd":            "Cinemark Rockwall 14 + XD",
-    # ── Brad Bills small-exhibitor city+state → actual venue name ─────────────
-    "espanola, nm":      "dreamcatcher 10",
-    "espanola nm":       "dreamcatcher 10",
-    "espanola":          "dreamcatcher 10",
-    "independence, mo":  "pharaoh independence 4",
-    "independence mo":   "pharaoh independence 4",
-    "guymon, ok":        "northridge guymon 8",
-    "guymon ok":         "northridge guymon 8",
-    "florence, sc":      "julia florence 4",
-    "florence sc":       "julia florence 4",
-    "tulsa, ok":         "eton tulsa 6",
-    "tulsa ok":          "eton tulsa 6",
-    "kirksville, mo":    "downtown kirksville 8",
-    "kirksville mo":     "downtown kirksville 8",
-    "marion, nc":        "hometown cinemas marion 2",
-    "marion nc":         "hometown cinemas marion 2",
-    "fulton, mo":        "fulton cinema 8",
-    "fulton mo":         "fulton cinema 8",
-    "lumberton, nc":     "hometown lumberton 4",
-    "lumberton nc":      "hometown lumberton 4",
-    "marshall, mo":      "cinema marshall 3",
-    "marshall mo":       "cinema marshall 3",
-    "milford, ia":       "pioneer milford 1",
-    "milford ia":        "pioneer milford 1",
-    "parsons, ks":       "the parsons theatre",
-    "parsons ks":        "the parsons theatre",
-    "norton, ks":        "norton theatre",
-    "norton ks":         "norton theatre",
-    # City-qualified overrides (booking name, city) → master list name
-    "cinemark 22 + imax":                    "cinemark lancaster 22",
-    "cinemark 22 + imax, lancaster":          "cinemark lancaster 22",
-    "cinemark 16 +xd, victorville":           "cinemark victorville 16 + xd",
-    "landmark 12 surrey":                     "landmark guildford 12",
-    # ── Cinemark national shorthand → Mica full name ─────────────────────────
-    "tinseltown usa, jacksonville":           "cinemark tinseltown jacksonville 20 + xd",
-    "tinseltown usa, fayetteville":           "cinemark tinseltown fayetteville 17 + xd",
-    "tinseltown usa, north aurora":           "cinemark tinseltown north aurora 17 usa",
-    "cinemark orlando and xd":               "cinemark festival bay orlando 20 + xd",
-    "cinemark orlando and xd, orlando":      "cinemark festival bay orlando 20 + xd",
-    "cinemark west dundee, il":               "cinemark spring hill mall 8 + xd",
-    "cinemark west dundee":                   "cinemark spring hill mall 8 + xd",
-    "movies 8 ladson oakbrook ii":            "cinemark movies summerville 8",
-    "movies 8 ladson oakbrook ii, summerville": "cinemark movies summerville 8",
-    "movies 10, bourbonnais":                 "cinemark movies bourbonnais 10",
-    "movies 10":                              "cinemark movies bourbonnais 10",
-    "cinemark louis joliet mall":             "cinemark louis joliet mall 14",
-    "deer park 16":                           "cinemark century deer park 16",
-    "deer park 16, deer park":                "cinemark century deer park 16",
-    "valparaiso commons shopping center":     "cinemark at valparaiso 12",
-    "cinemark palace 20, boca raton":         "Cinemark Palace 20 + XD",
-    "cinemark palace 20":                     "Cinemark Palace 20 + XD",
-    "cinemark paradise 24, davie":            "Cinemark Paradise 24 + XD",
-    "cinemark paradise 24":                   "Cinemark Paradise 24 + XD",
-    "cinemark bluffton, bluffton":            "Cinemark Bluffton 12",
-    "cinemark bluffton":                      "Cinemark Bluffton 12",
-    "cinemark seven bridges":                 "cinemark 7 bridges woodridge 16 imax",
-    "cinemark seven bridges, woodridge":      "cinemark 7 bridges woodridge 16 imax",
-    # ── Cinemark Taylor Reynolds circuit (THEATRE-header format) ────────────────
-    "cinemark 16, mesa":                      "cinemark mesa 16",
-    "cinemark 16, provo":                     "cinemark provo 16",
-    "cinemark 24 + xd, west jordan":          "cinemark west jordan 24+xd",
-    "imperial valley 14, el centro":          "cinemark century imperial valley mall 14",
-    "imperial valley 14":                     "cinemark century imperial valley mall 14",
-    "sierra vista 10, sierra vista":          "cinemark sierra vista 10",
-    "sierra vista 10":                        "cinemark sierra vista 10",
-    "cinemark spanish fork + xd, spanish fork": "cinemark spanish fork 8+xd",
-    "cinemark spanish fork + xd":             "cinemark spanish fork 8+xd",
-    "henderson 12, henderson":                "Cinemark Cinedome 12 (Henderson)",
-    "henderson 12":                           "Cinemark Cinedome 12 (Henderson)",
-    "cinemark draper + xd, draper":           "Cinemark Draper 12 + XD",
-    "cinemark draper + xd":                   "Cinemark Draper 12 + XD",
-    "cinemark farmington + xd, farmington":   "Cinemark Farmington 14+ XD",
-    "cinemark farmington + xd":               "Cinemark Farmington 14+ XD",
-    "cinemark riverton + xd, riverton":       "Cinemark Riverton Ridgewood 14 +XD",
-    "cinemark riverton + xd":                 "Cinemark Riverton Ridgewood 14 +XD",
-    "century el con + xd, tucson":            "Cinemark Century 20 El Con and XD (Tucson)",
-    "century el con + xd":                    "Cinemark Century 20 El Con and XD (Tucson)",
-    "cinemark 12, american fork":             "Cinemark American Fork 12",
-    # Kaitlin Privitera (AMC KC/Midwest) — report short names differ from Mica names
-    "studio 28":               "amc studio olathe 30",
-    "independence 20":         "amc independence commons 20",
-    "prairiefire 17":          "amc dine-in prairie fire 17",
-    "legends 14":              "amc legends kansas city 14",
-    "northrock 14":            "amc northrock wichita 14",
-    "springfield 11":          "amc springfield 11",
-    # James Douglas (AMC SE/Florida) — report short names differ from Mica names
-    "regency 24":            "amc regency sq jacksonville 24",
-    "aventura mall 24":      "amc aventura 24",
-    "sunset place 24":       "amc sunset s miami 24",
-    "weston 8":              "amc weston cinema sunrise 8",
-    "bayou 15":              "amc bayou pensacola 15",
-    "avenue 16":             "amc avenue melbourne 16",
-    "tallahassee 20":        "amc tallahassee mall 20",
-    "veterans expressway 24":"amc veterans tampa 24",
-    "regency 20":            "amc regency sq brandon 20",
-    "woodlands square 20":   "amc woodland sq oldsmar 20",
-    "riverview 14":          "amc riverview gibsonton 14",
-    "westshore plaza 14":    "amc westshore tampa 14",
-    "sundial 12":            "amc sundial st petersburg",
-    "coral ridge 10":        "amc coral ridge ft lauderdale 10",
-    "pensacola 18":          "amc classic pensacola 18",
-    # Sergio Candelas (AMC Central/Southwest) — report short names differ from Mica names
-    "quail springs mall 24": "amc quail springs oklahoma city 24",
-    "town square 18":        "amc town square las vegas 18",
-    "decatur 10":            "amc classic decatur 10",
-    "springfield 12":        "amc classic springfield 12",
-    "springfield 8":         "amc springfield 8",
-    "esplanade 14":          "amc dine-in esplanade 14",
-    # Ron Wooley (AMC NE) — report short names differ from Mica names
-    "plainville 20":   "amc plainville cinema 20",
-    "palisades 21":    "amc palisades center 21",
-    "freehold 14":     "amc freehold metroplex 14",
-    "aviation 12":     "amc aviation linden 12",
-    "levittown 10":    "amc dine-in levittown 10",
-    "landmark 8":      "amc landmark 8",
-    # Dave Glass (AMC) — report short names differ from Mica names
-    "southlands 16":        "amc southlands aurora 16",
-    "flatiron crossing 14": "amc flatiron broomfield 14",
-    "orchard 12":           "amc orchard town center westminster 12",
-    "mayfair 18":           "amc mayfair mall wauwatosa 18",
-    "southdale center 16":  "amc southdale edina 16",
-    "southgate 9":          "amc dine-in southgate 9",
-    "southcenter 16":       "amc southcenter tukwila 16",
-    "factoria 8":           "amc factoria bellevue 8",
-    "alderwood 16":         "amc alderwood lynnwood 16",
-    # Kathryn Wintermyer (AMC Detroit/OH/PA) — report short names differ from Mica names
-    "forum 30":             "amc forum sterling heights 17",
-    "gratiot 15":           "amc star gratiot clinton township 15",
-    "john r 15":            "amc john r theatre 15",
-    "stonybrook 20":        "amc stonybrook louisville 20",
-    "309 cinema 9":         "amc 309 cinemas north wales 9",
-    "berkshire 8":          "amc berkshire wyomissing 8",
-    "marlton 8":            "amc marlton cinemas 8",
-    "westmoreland 15":      "amc westmoreland greensburg 15",
-    # David Saunders (Pacific NW / OR / WA indie circuit)
-    "bremerton":            "seefilm cinema",
-    "cinestars":            "hood river cinemas 5",
-    "coast":                "coast fort bragg 4",
-    "milwaukie":            "milwaukie portland 2",
-    "living room pdx":      "living room theatres portland",
-    "living room indy":     "living room theaters indianapolis",
-    "battle ground":        "battle ground cinema 8",
-    "canby":                "canby cinema 8",
-    "independence":         "independence cinema 8",
-    "oak grove":            "oak grove portland 8",
-    "roseburg":             "roseburg cinema",
-    "sandy":                "sandy cinema 8",
-    "scappoose":            "scappoose cinema 7",
-    # ── Small Indies / Diane Johnson circuit ──────────────────────────────────
-    "lamar, mo":            "plaza lamar 1",
-    "lamar mo":             "plaza lamar 1",
-    "borger, tx":           "morley borger 5",
-    "borger tx":            "morley borger 5",
-    "mountain grove, mo":   "fun city 5 cinemas",
-    "mountain grove mo":    "fun city 5 cinemas",
-    "mountain grove":       "fun city 5 cinemas",
-    "mt vernon 8":          "Mount Vernon 8",
-    "mesa grand 14":        "Mesa Grande 14",
-    "southern hill 12":     "Southern Hills 12",
-    "arrowhead town center 14": "Arrowhead 14",
-    "tulsa 12":             "Tulsa Hills 12",
-    "southroads 20":        "Southroads Tulsa 20",
-    "foothills 15":         "Foothills Tucson 15",
-    "surprise 14":          "Surprise Pointe 14",
-    # ── Regal / STM format aliases ────────────────────────────────────────────
-    # Brandon Corrier (Regal PA/NJ/NY circuit)
-    "hadley theatre stm 16":            "Regal Hadley Cinemas South Plainfield 16",
-    "washington township 14":           "Regal Washington Township Sewell 14",
-    "reg king of prussia 4dx & imax":   "Regal King Of Prussia 16",
-    # Mark Waring (Regal MD/VA/DC circuit)
-    "fox stm 16 & imax":                "Regal Fox Ashburn 16",
-    "kingstowne stm 16 & rpx":          "Regal Kingstowne Cinema 16",
-    "laurel towne centre 12":           "Regal Laurel Town Center 12",
-    "valley mall stm 16":               "Regal Valley Mall Hagerstown 16",
-    # Ashley Hensley (Regal Mountain West/CO/HI circuit)
-    "boise stm 22 & imax":              "Regal Edwards Boise 21 ScreenX, 4DX & IMAX",
-    # Alanna Peffley (Regal FL/VA/NC circuit)
-    "regal dania point 4dx rpx &vip":   "Regal Dania Pointe 16",
-    "regal dania point 4dx rpx & vip":  "Regal Dania Pointe 16",
-    "regal bistro at the falls":         "Regal Falls Miami 12",
-    "kendall vlg stm 16 imax & rpx":    "Regal Kendall Village Miami 16",
-    "pavilion stm 14 & rpx":            "Regal Pavilion Port Orange 14",
-    "champlain centre stm 8":           "Champlain Plattsburgh 8",
-    "e. greenbush 8":                   "East Greenbush 8",
-    "aviation mall 9":                  "Aviation Mall Queensbury 9",
-    "natomas mktplace stm 16 & rpx":    "Natomas Marketplace 16",
-    "stockton cty ctr stm 16 & imax":   "Stockton City Center 16",
-    "auburn stm 17":                    "Auburn Stadium 17",
-    "bridgeport stm 18 & imax":         "Bridgeport Tigard 18",
-    "cascade stm 16 imax & rpx":        "Cascade Vancouver 16",
-    "cinema 99 stm 11":                 "Cinema 99 Vancouver",
-    "city center stm 12":               "City Vancouver 12",
-    "movies on tv stm 16":              "Movies Hillsboro 16",
-    "santiam stm 11":                   "Santiam Salem 11",
-    "stark street stm 10":              "Stark Gresham 10",
-    # ── Celebration Cinema aliases ────────────────────────────────────────────
-    "cinema carousel 16":               "Celebration Cinema Carousel",
-    "crossroads 15 + imax":             "Celebration Crossroads Imax",
-    "rivertown 13 + c premium":         "Celebration Cinema Rivertown",
-    "grand rapids north 17 + imax":     "Celebration Cinema GR North",
-    "grand rapids south 15 + c premium":"Celebration South",
-    "lansing 19 + c premium xl":        "Celebration Lansing Imax",
-    "mt. pleasant 11":                  "Celebration Mt Pleasant",
-    "benton harbor 14 + dbox":          "Celebration Benton Harbor",
-    # ── Michael Eiff (Cinemark OH / IA circuit) ──────────────────────────────
-    "cinemark 14, strongsville":         "cinemark strongsville 14",
-    "cinemark 14, mansfield":            "cinemark mansfield 14",
-    "cinemark 12, zanesville":           "cinemark colony square mall",
-    "tinseltown usa + xd, north canton": "cinemark tinseltown n canton 24+ xd",
-    "movies 16, gahanna":                "cinemark stoneridge plaza movies 16",
-    "w. des moines jordan creek + xd":   "cinemark century 20 jordan creek and xd",
-    # ── Jennifer Solorzano (Cinemark CO / NM / TX West circuit) ─────────────
-    "cinemark 12, greeley":               "Cinemark Greeley 12",
-    "cinemark 16, fort collins":          "Cinemark Fort Collins 16",
-    "main place 6, mcallen":              "Cinemark Movies 6",
-    "main place 6":                       "Cinemark Movies 6",
-    "cinemark 16 + xd, brownsville":      "Cinemark Brownsville 16 + XD",
-    "cinemark 16 + xd, harlingen":        "Cinemark Harlingen 16 + XD",
-    "cinemark abilene and xd, abilene":   "Cinemark Abilene 12",
-    "cinemark abilene and xd":            "Cinemark Abilene 12",
-    # ── Andy Anderson (Cinemark SF Bay Area) ─────────────────────────────────
-    "century at hayward, hayward":        "Cinemark Century At Hayward 12",
-    "century at hayward":                 "Cinemark Century At Hayward 12",
-    # ── Beth Teal (Cinemark East / Midwest) ──────────────────────────────────
-    "cinemark towson + xd, towson":           "Cinemark Towson 15 + XD",
-    "cinemark towson + xd":                   "Cinemark Towson 15 + XD",
-    "cinemark 15 + xd, hadley":               "Cinemark Hadley 15 + XD",
-    "cinemark tinseltown + xd, louisville":   "Cinemark Tinseltown Louisville + XD",
-    "cinemark paducah, paducah":              "Cinemark Paducah 12",
-    "cinemark paducah":                       "Cinemark Paducah 12",
-    # ── Jennifer Hernandez (Cinemark SoCal — LA / Palm Springs) ─────────────
-    "cinemark 12 and xd, los angeles":        "Cinemark 12 Howard Hughes LA and XD",
-    "cinemark 16, palmdale":                  "Cinemark Antelope Valley Mall Palmdale 16",
-    "century la quinta + xd, la quinta":      "Cinemark Century La Quinta 12 + XD",
-    # ── Allie Fullmer (Cinemark TX — Houston / Austin / SA / Corpus) ─────────
-    "tinseltown 17 + xd, the woodlands":      "Cinemark The Woodlands 17 + XD",
-    "cinemark 18 + xd, webster":              "Cinemark Webster 18 + XD",
-    "hollywood usa 20, pasadena":             "Cinemark Hollywood Pasadena 20",
-    "cinemark 19 + xd, katy":                 "Cinemark Katy 19 + XD",
-    "cinemark 12 + xd, pearland":             "Cinemark Pearland 12 + XD",
-    "cinemark 12 + xd, cypress":              "Cinemark Cypress 12 + XD",
-    "cut! by cinemark cypress, cypress":      "Cinemark Cut 8!",
-    "cut! by cinemark cypress":               "Cinemark Cut 8!",
-    "cinemark 12, rosenberg":                 "Cinemark Rosenberg 12",
-    "cinemark 12, victoria":                  "Cinemark Victoria 12",
-    "century 16 + imax, corpus christi":      "Cinemark Century Corpus Christi 16 + XD and IMAX",
-    "college station + xd, college station":  "Cinemark College Station 18 + XD",
-    "stone hill town center, pflugerville":   "Cinemark Stone Hill Town Ctr Pflugerville 9 *TEMP 5*",
-    "stone hill town center":                 "Cinemark Stone Hill Town Ctr Pflugerville 9 *TEMP 5*",
-    "cinemark 14, round rock":                "Cinemark Round Rock 14",
-    "southpark meadows 14, austin":           "Cinemark Southpark Mall Austin 14",
-    "southpark meadows 14":                   "Cinemark Southpark Mall Austin 14",
-    "movies 8, del rio":                      "Cinemark Movies Del Rio 8",
-    "cinemark 7, eagle pass":                 "Cinemark Eagle Pass 7",
-    # ── Tammy Flores / Hooky Entertainment ───────────────────────────────────
-    "hooky entertainment + sdx + imax, hutto": "Hooky Entertainment + SDX + IMAX Hutto 8",
-    "hooky entertainment + sdx + imax":        "Hooky Entertainment + SDX + IMAX Hutto 8",
-    "redstone 14 cinemas w/pdx":               "Red Stone 14 Cinemas",
-    "redstone 14 cinemas":                     "Red Stone 14 Cinemas",
-    # ── Tom McCauley (AMC New England / Mid-Atlantic) ─────────────────────────
-    "methuen 20":               "AMC Methuen at the Loop 20",
-    "hampton 24":               "AMC Hampton Towne Centre 24",
-    "loudoun 11":               "AMC Loudoun Station Ashburn 11",
-    "worldgate 9":              "AMC Worldgate Herndon 9",
-    "columbia mall 14":         "AMC Columbia Maryland 14",
-    "mj capital center 12":     "AMC Magic Johnson Capital Center 12",
-    "st charles towne center 9":"AMC St. Charles Waldorf 9",
-    "academy 8":                "AMC Academy Greenbelt 8",
-    # ── Justin Johnson (AMC Chicago / Midwest / Indiana) ─────────────────────
-    "yorktown 18":              "AMC Yorktown Lombard 18",
-    "galewood 14":              "AMC Galewood Crossings 14",
-    "hawthorn 12":              "AMC Hawthorn Vernon Hills 12",
-    "randhurst 12":             "AMC Randhurst Mount Prospect 12",
-    "peru 8":                   "AMC Peru Mall 8",
-    "castleton square 14":      "AMC Castleton Indianapolis 14",
-    "washington sq 12":         "AMC Washington Square 12",
-    # ── Dan Cammarata (AMC Texas / SE) ───────────────────────────────────────
-    "northpark 15":             "AMC North Park Dallas 15 & IMAX",
-    "lakeline 9":               "AMC Lakeline Mall Cedar Park 9",
-    "fountains 18":             "AMC Fountains Stafford 18 & IMAX",
-    "rivercenter 11":           "AMC Rivercenter San Antonio 9",
-    "sikes 10":                 "AMC Sikes Senter 10",
-    "corpus 16":                "AMC Corpus Christi 16",
-    "stonebriar mall 24":       "AMC Stonebriar Frisco 24 & IMAX",
-    "firewheel town center 18": "AMC Firewheel Garland 18",
-    "eastchase 9":              "AMC Eastchase Ft Worth 9",
-    "willowbrook 24":           "AMC Willowbrook Houston 24",
-    "brazos 14":                "AMC Brazos Stadium Lake Jackson 14",
-    # ── Devan Tolbert (AMC SE / Louisiana / Carolinas) ───────────────────────
-    "hanes 12":                 "AMC Hanes Winston Salem 12",
-    # ── Brandon Ferguson (AMC LA / San Diego / Sacramento / SF Bay Area) ──────
-    "orange 30":                "AMC Block Orange 30 & IMAX",
-    "tyler 16":                 "AMC Tyler Riverside 16 & IMAX",
-    "mercado 20":               "AMC Mercado Santa Clara 20 & IMAX",
-    "metreon 16":               "AMC Metreon San Francisco 16 & IMAX",
-    "eastridge 15":             "AMC Eastridge Mall San Jose 15 & IMAX",
-    "saratoga 14":              "AMC Saratoga San Jose 14 & IMAX",
-    # ── Kelsey Kash (AMC AL / TN / Chattanooga / Knoxville / Tri-Cities) ──────
-    "dothan pavilion 12":       "AMC CLASSIC Dothan Pavillion 12",
-    "vestavia 10":              "AMC DINE-IN Vestavia Hills 10",
-    "battlefield 10":           "AMC CLASSIC Battlefield Ft Oglethorpe 10",
-    "thoroughbred 20":          "AMC Thoroughbred Franklin 20 & IMAX",
-    "stones river 9":           "AMC Stone River 9",
-    # ── Blue Smiley / CFB Epic + GTC (Rentrak-grid fallback) ─────────────────
-    "regency square 8":         "Epic Regency Cinema Stuart 8",
-    "riverwatch":               "GTC Riverwatch Cinemas 12",
-    "gateway 7":                "GTC Gateway 7",
-    "island 7":                 "GTC Island 7",
-    "smithfield cinemas 10":    "GTC Smithfield 10",
-    "valdosta stadium 15 w/gtx":"GTC Valdosta 15",
-    "pooler stadium 14 w/gtx":  "GTC Pooler 14",
-    "mall 7":                   "GTC Mall Cinemas 7",
-    "evans 14":                 "GTC Evans 14",
-    "liberty 9":                "GTC Liberty 9",
-    "mountain cinemas 8":       "GTC Mountain Cinemas 8",
-    "university 16 cinemas w/gtx":"GTC University 16",
-    "moultrie stadium 6 cinemas":"GTC Moultrie 6",
-    "danville stadium 12":      "GTC Danville 12",
-    # ── Cinemark Pacific NW (Josh Wymer) ─────────────────────────────────────
-    "lincoln square cinema with imax":    "cinemark lincoln square cinemas imax 16",
-    "lincoln square cinema bistro 6":     "cinemark reserve lincoln square dine-in 6",
-    "cinemark totem lake + xd":           "cinemark village at totem lake 8",
-    "century walla walla grand cinema 12":"cinemark walla walla grand cinema12",
-    "century arden and xd, sacramento":   "Cinemark Century Arden + XD 14",
-    "century arden and xd":               "Cinemark Century Arden + XD 14",
-    "century marina + xd, marina":        "Cinemark Century Marina + XD 5",
-    "century marina + xd":                "Cinemark Century Marina + XD 5",
-    "cinemark 17, springfield":           "Cinemark Springfield 17",
-    # ── Watson / Imagine Cinemas / CineStarz Canada ───────────────────────────
-    "waikoloa 3":               "waikoloa village cinema 3",
-    "promenade mall":           "imagine cinemas promenade 6",
-    "london":                   "imagine cinemas london",
-    "lakeshore windsor":        "imagine cinemas lakeshore",
-    "alliston":                 "imagine cinemas alliston",
-    "cote des nieges":          "cine starz cote-des-neiges 7",
-    "cote-des-nieges":          "cine starz cote-des-neiges 7",
-    "deluxe taschereau":        "cine starz taschereau 12",
-    "deluxe longueuil":         "cinestarz longueuil 14",
-    "burlington":               "cine starz burlington",
-    "st. laurent":              "cine starz st laurent centre",
-    "st laurent":               "cine starz st laurent centre",
-    # ── Culbertson / IBS Indiana ─────────────────────────────────────────────
-    "goshen":                   "linway plaza goshen 14",
-    "jerseyville":              "the stadium theater 3",
-    "litchfield":               "westside litchfield 3",
-    "rensselaer":               "fountain stone theaters rensselaer 5",
-    "nappanee theatre":         "nappanee theatre 1",
-    "goshen, in":               "linway plaza goshen 14",
-    "jerseyville, il":          "the stadium theater 3",
-    "litchfield, il":           "westside litchfield 3",
-    "rensselaer, in":           "fountain stone theaters rensselaer 5",
-}
+from venue_aliases import CITY_VENUE_ALIASES as _CITY_VENUE_ALIASES
 
 
 def _apply_city_alias(name: str, city: str = "") -> str:
     """Translate booking theatre name to actual venue name if known.
     Tries city-qualified key first ("name, city") for disambiguation.
     When city is "City, ST" (includes state), also tries just the city part."""
+    # Normalize internal whitespace so "JONESBORO  TOWNE" matches key "jonesboro towne"
+    name_l = ' '.join(name.lower().split())
     if city:
-        city_l = city.lower().strip()
-        combined = f"{name.lower().strip()}, {city_l}"
+        city_l = ' '.join(city.lower().split())
+        combined = f"{name_l}, {city_l}"
         if combined in _CITY_VENUE_ALIASES:
             return _CITY_VENUE_ALIASES[combined]
         # Also try just the city name without the state abbreviation
         city_only = city_l.split(",")[0].strip()
         if city_only and city_only != city_l:
-            combined2 = f"{name.lower().strip()}, {city_only}"
+            combined2 = f"{name_l}, {city_only}"
             if combined2 in _CITY_VENUE_ALIASES:
                 return _CITY_VENUE_ALIASES[combined2]
-    return _CITY_VENUE_ALIASES.get(name.lower().strip(), name)
+    return _CITY_VENUE_ALIASES.get(name_l, name)
 
 
 # ---------------------------------------------------------------------------
@@ -2889,7 +3017,7 @@ _FIND_ONE_JS = """
         const ABBREVS = {stm: 'stadium', ctr: 'center', blvd: 'boulevard'};
         // Chain/brand words that are too generic to count toward the match threshold
         const CHAIN_WORDS = new Set(['regal', 'amc', 'cinemark', 'harkins', 'marcus',
-                                     'showcase', 'cineworld', 'amstar', 'imax']);
+                                     'showcase', 'cineworld', 'amstar', 'imax', 'malco']);
         function sigWords(n) {
             // Strip diacritics so accented names (e.g. "Española") match plain ASCII
             const plain = (n || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');
@@ -2904,18 +3032,55 @@ _FIND_ONE_JS = """
         const effectiveWords = tCore.length > 0 ? tCore : tWords;
         const fWords = film ? sigWords(film) : [];
         if (tWords.length === 0) return {idx: -1, reason: 'no sig words'};
+        // Find the "Venue" column index by iterating thead rows individually so the index
+        // matches what each tbody row uses (flattening across thead rows would over-count).
+        let venueColIdx = -1;
+        const theadRows = document.querySelectorAll('table thead tr');
+        for (const tr of theadRows) {
+            const cells = tr.querySelectorAll('th, td');
+            for (let i = 0; i < cells.length; i++) {
+                const ht = cells[i].textContent.trim().toLowerCase();
+                if (ht.startsWith('venue') || ht === 'theatre' || ht === 'theater') {
+                    venueColIdx = i;
+                    break;
+                }
+            }
+            if (venueColIdx >= 0) break;
+        }
         const rows = Array.from(document.querySelectorAll('table tbody tr'));
         let bestIdx = -1, bestScore = 0;
+        // Helper: get the venue cell text for a row, with fallbacks
+        function getVenueText(row) {
+            if (venueColIdx >= 0) {
+                const cells = row.querySelectorAll('td');
+                if (venueColIdx < cells.length) {
+                    const t = cells[venueColIdx].textContent.trim();
+                    if (t.length >= 3) return t;
+                }
+            }
+            // Fallback: longest non-toggle <a> text
+            const cands = Array.from(row.querySelectorAll('a'))
+                .filter(a => !a.hasAttribute('ngbdropdowntoggle'))
+                .filter(a => !a.closest('[ngbdropdownmenu]'))
+                .filter(a => !a.closest('.dropdown-menu'))
+                .map(a => a.textContent.trim())
+                .filter(t => t.length >= 3);
+            cands.sort((a, b) => b.length - a.length);
+            return cands[0] || '';
+        }
         rows.forEach((row, i) => {
             if (!row.querySelector('[ngbdropdowntoggle]')) return;  // skip header/detail rows
-            const text = row.textContent.toLowerCase();
+            const venueText = getVenueText(row).toLowerCase();
+            const fullText = row.textContent.toLowerCase();
+            // If no usable venue text found, fall back to full row text
+            const text = venueText || fullText;
             // Core (non-chain) word matches drive the threshold check
             const coreMatched = effectiveWords.filter(w => text.includes(w));
             // All word matches (incl. chain) drive ranking + longest-word tiebreaker
             const tMatched = tWords.filter(w => text.includes(w));
             const tLen = tMatched.length > 0 ? Math.max(...tMatched.map(w => w.length)) : 0;
-            // Film words: tiebreaker bonus — used when same theatre has 2+ films
-            const fCount = fWords.length > 0 ? fWords.filter(w => text.includes(w)).length : 0;
+            // Film words: tiebreaker bonus — match against full row text (film col may be outside venue link)
+            const fCount = fWords.length > 0 ? fWords.filter(w => fullText.includes(w)).length : 0;
             const score = coreMatched.length * 100000 + tLen * 100 + fCount * 10;
             if (score > bestScore) { bestScore = score; bestIdx = i; }
         });
@@ -2924,9 +3089,9 @@ _FIND_ONE_JS = """
         const threshold = Math.max(1, Math.ceil(effectiveWords.length * 0.5));
         if (bestIdx < 0 || matchCount < threshold) {
             const bestText = bestIdx >= 0 ? rows[bestIdx].textContent.trim().replace(/\\s+/g,' ').slice(0, 300) : 'no rows';
-            return {idx: -1, reason: `score ${matchCount}/${effectiveWords.length} < threshold ${threshold} — best candidate: "${bestText}"`};
+            return {idx: -1, reason: `score ${matchCount}/${effectiveWords.length} < threshold ${threshold} [venueCol=${venueColIdx}] — best candidate: "${bestText}"`};
         }
-        return {idx: bestIdx, rowText: rows[bestIdx].textContent.trim().slice(0, 70)};
+        return {idx: bestIdx, rowText: rows[bestIdx].textContent.trim().slice(0, 70), venueText: getVenueText(rows[bestIdx]), venueCol: venueColIdx};
     }
     """
 
@@ -2964,7 +3129,7 @@ def _set_screening_type_per_row(page, entries: list[dict], screening_type: str, 
             continue
         alias_note = f" [alias->{lookup_name}]" if lookup_name != name else ""
         label = f"'{name}'{alias_note}" + (f" / '{film}'" if film else "")
-        log(f"    MATCH  {label} -> row {idx} -- {info.get('rowText','')[:60]}")
+        log(f"    MATCH  {label} -> row {idx} [venueCol={info.get('venueCol','?')}] venue='{info.get('venueText','')[:60]}'")
 
         # Check the checkbox for this row via JS
         checked = page.evaluate("""
@@ -2973,10 +3138,13 @@ def _set_screening_type_per_row(page, entries: list[dict], screening_type: str, 
                 if (idx >= rows.length) return false;
                 const cb = rows[idx].querySelector('input[type="checkbox"]');
                 if (!cb) return false;
-                if (!cb.checked) cb.click();
+                if (!cb.checked) {
+                    cb.click();
+                    cb.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    cb.dispatchEvent(new Event('change', {bubbles: true}));
+                }
                 return true;
-            }
-        """, idx)
+            }""", idx)
         if checked:
             count += 1
         else:
@@ -2985,9 +3153,12 @@ def _set_screening_type_per_row(page, entries: list[dict], screening_type: str, 
     if count == 0:
         return 0
 
+    # Let Angular register the checkbox state before opening Bulk Change
+    page.wait_for_timeout(400)
+
     # Apply Bulk Change → Screening Types for all checked rows
     log(f"  Applying Bulk Change → {screening_type} for {count} checked rows ...")
-    _bulk_set_screening_type(page, screening_type, contact="")
+    _bulk_set_screening_type(page, screening_type, contact=contact)
 
     # Uncheck all rows after bulk change
     page.evaluate("""() => {
@@ -2998,6 +3169,335 @@ def _set_screening_type_per_row(page, entries: list[dict], screening_type: str, 
     return count
 
 
+# ---------------------------------------------------------------------------
+# Holdover playday modifier support
+# ---------------------------------------------------------------------------
+# Maps booking modifier text → list of active day abbreviations (Fr/Sa/Su/Mo/Tu/We/Th).
+# Default (None) = all 7 days.  Expand as new modifiers are encountered.
+# ---------------------------------------------------------------------------
+
+_PLAYDAY_MAP: dict = {
+    None:             ["Fr","Sa","Su","Mo","Tu","We","Th"],  # default — all 7
+    # Day-of-week keys: "final <day>" = film played Fri through that day
+    "fr":             ["Fr"],
+    "sa":             ["Fr","Sa"],
+    "su":             ["Fr","Sa","Su"],
+    "mo":             ["Fr","Sa","Su","Mo"],
+    "tu":             ["Fr","Sa","Su","Mo","Tu"],             # finals Tuesday
+    "we":             ["Fr","Sa","Su","Mo","Tu","We"],        # finals Wednesday
+    # "th" = all 7 (same as default) — no separate entry needed
+    "thru tuesday":   ["Fr","Sa","Su","Mo","Tu"],
+    "weekends only":  ["Fr","Sa","Su"],
+    "weekends":       ["Fr","Sa","Su"],
+    "sa/su only":     ["Sa","Su"],
+    "sa/su":          ["Sa","Su"],
+    "weekdays only":  ["Mo","Tu","We","Th"],
+    "weekdays":       ["Mo","Tu","We","Th"],
+    # "need keys for a group on MM/DD" = single-day-only modifiers (Hold + only that day)
+    # Used by Jennifer Hernandez and Regal bookers. See _keys_date_to_modifier below.
+    # (No "only_th" because Thursday case is handled as regular Final upstream.)
+    "only_fr":        ["Fr"],
+    "only_sa":        ["Sa"],
+    "only_su":        ["Su"],
+    "only_mo":        ["Mo"],
+    "only_tu":        ["Tu"],
+    "only_we":        ["We"],
+}
+
+
+def _final_date_to_playday_modifier(date_str: str) -> str | None:
+    """
+    Given 'MM/DD' from a 'FINAL MM/DD' action string, return the _PLAYDAY_MAP key
+    representing 'play through this day of week'.
+    Returns None if the final day is Thursday (full week = default, no change needed).
+    Handles year rollover by picking the year that keeps the date closest to today.
+    """
+    import datetime as _dt
+    try:
+        parts = date_str.strip().split('/')
+        month, day = int(parts[0]), int(parts[1])
+        today = _dt.date.today()
+        # Try current year; if it's more than 180 days past, try next year
+        candidate = _dt.date(today.year, month, day)
+        if (today - candidate).days > 180:
+            candidate = _dt.date(today.year + 1, month, day)
+        # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+        # Holdover week runs Fri–Thu; Thursday = full week = default (None)
+        _DOW_TO_MOD = {0: "mo", 1: "tu", 2: "we", 3: None,
+                       4: "fr", 5: "sa", 6: "su"}
+        return _DOW_TO_MOD.get(candidate.weekday())
+    except Exception:
+        return None
+
+
+# Pattern: matches "need keys [for [a] group] on MM/DD" anywhere in the action text.
+# Examples:
+#   "need keys for a group on 5/15"
+#   "final but need keys for a group on 5/15"
+#   "need keys on 5/15"
+# Used by Jennifer Hernandez (Cinemark SoCal) and Regal bookers.
+_NEED_KEYS_PAT = re.compile(r'need\s+keys?\b[^0-9]*(\d{1,2}/\d{1,2})', re.IGNORECASE)
+
+
+def _keys_date_to_status_and_modifier(date_str: str) -> tuple[str, str | None]:
+    """
+    Given 'MM/DD' from a 'need keys for a group on MM/DD' action string, return
+    (status, playday_modifier_key) for the holdover row.
+
+    Rules (per Tommy 2026-06-01):
+      - The group needs film keys ON the given date.
+      - If that date's day-of-week is THURSDAY: return ('Final', None) — the
+        playweek ends Thursday and the prior playweek already covered it, so
+        a normal Final is the correct treatment.
+      - Otherwise (Fri/Sa/Su/Mo/Tu/We): return ('Hold', 'only_<day>') so the
+        current holdover row is Held with only that single day's button checked,
+        keeping keys alive on the requested date. The NEXT playweek's row will
+        be Finaled normally.
+
+    Returns ('Final', None) on parse failure so the booking still gets booked.
+    Handles year rollover the same way _final_date_to_playday_modifier does.
+    """
+    import datetime as _dt
+    try:
+        parts = date_str.strip().split('/')
+        month, day = int(parts[0]), int(parts[1])
+        today = _dt.date.today()
+        candidate = _dt.date(today.year, month, day)
+        if (today - candidate).days > 180:
+            candidate = _dt.date(today.year + 1, month, day)
+        # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+        _DOW_TO_ONLY = {0: "only_mo", 1: "only_tu", 2: "only_we", 3: None,
+                        4: "only_fr", 5: "only_sa", 6: "only_su"}
+        mod = _DOW_TO_ONLY.get(candidate.weekday())
+        if mod is None:
+            # Thursday — treat as regular Final, no playday changes needed
+            return ('Final', None)
+        return ('Hold', mod)
+    except Exception:
+        return ('Final', None)
+
+_SET_PLAYDAYS_JS = """
+(args) => {
+    const {rowIdx, activeDays} = args;
+    const ALL_DAYS = new Set(['Fr','Sa','Su','Mo','Tu','We','Th']);
+    const expectedSet = new Set(activeDays);
+    const corrections = [];
+
+    const rows = document.querySelectorAll('table tbody tr');
+    if (rowIdx < 0 || rowIdx >= rows.length) return ['ERROR:row_not_found'];
+    const row = rows[rowIdx];
+
+    // Each day uses Bootstrap toggle-button: <input type="checkbox" id="..."> + <label for="...">Fr</label>
+    // State is on the input's .checked property; the label is what we click to toggle.
+    const dayLabels = Array.from(row.querySelectorAll('label.playDay, label.playday'));
+    let usedFallback = false;
+    let labels = dayLabels;
+    if (labels.length === 0) {
+        // Fallback: any label whose text is exactly a day code
+        labels = Array.from(row.querySelectorAll('label')).filter(l =>
+            ALL_DAYS.has((l.textContent || '').trim())
+        );
+        usedFallback = true;
+    }
+    if (labels.length === 0) return ['ERROR:no_day_buttons'];
+
+    labels.forEach(label => {
+        const day = (label.textContent || '').trim();
+        if (!ALL_DAYS.has(day)) return;
+
+        // Resolve the associated checkbox via for= attribute, sibling input, or descendant input
+        let cb = null;
+        const forId = label.getAttribute('for');
+        if (forId) cb = document.getElementById(forId);
+        if (!cb && label.previousElementSibling && label.previousElementSibling.tagName === 'INPUT') {
+            cb = label.previousElementSibling;
+        }
+        if (!cb) cb = label.querySelector('input[type="checkbox"]');
+
+        const isSelected = cb ? !!cb.checked : false;
+        const shouldBe = expectedSet.has(day);
+        if (shouldBe !== isSelected) {
+            // Click the label (visible toggle target for Bootstrap btn-check)
+            label.click();
+            label.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+            corrections.push(day + ':' + (shouldBe ? 'on' : 'off'));
+        } else {
+            corrections.push(day + ':keep(' + (isSelected ? 'on' : 'off') + ')');
+        }
+    });
+    return corrections;
+}
+"""
+
+
+def _set_playdays_per_row(page, entries: list[dict], modifier: str | None, contact: str = "") -> int:
+    """
+    Set playday day buttons (Fr/Sa/Su/Mo/Tu/We/Th) for matching holdover rows.
+    modifier: key in _PLAYDAY_MAP (None = all 7, default — no change needed).
+    Returns number of rows processed.
+
+    Per Tommy's walkthrough (2026-05-20): setting a row to Hold auto-applies all 7 days;
+    we then click the inline day buttons in that row to UNCHECK the ones we don't want.
+    The inline toggles auto-save (no Save button required). Mica's day buttons use
+    Bootstrap btn-check pattern (hidden <input> + visible <label>). Angular ngModel only
+    fires from REAL pointer events, so we use Playwright's locator.click() rather than
+    a JS-synthesized click — that was the bug causing the toggle to log "off" but not
+    actually update the visible UI.
+    """
+    if modifier is None:
+        return 0  # all 7 days is the default — nothing to change
+    active_days = _PLAYDAY_MAP.get(modifier.lower() if modifier else None)
+    if active_days is None:
+        log(f"    PLAYDAYS WARNING: unknown modifier '{modifier}' — skipping day buttons")
+        return 0
+    active_set = set(active_days)
+
+    count = 0
+    for entry in entries:
+        name = entry["theatre"] if isinstance(entry, dict) else entry
+        film = entry.get("film", "") if isinstance(entry, dict) else ""
+        city = entry.get("city", "") if isinstance(entry, dict) else ""
+
+        _ensure_holdovers_page(page, contact)
+
+        lookup_name = _apply_city_alias(name, city)
+        info = page.evaluate(_FIND_ONE_JS, {"name": lookup_name, "film": film})
+        idx = info["idx"]
+        if idx < 0:
+            log(f"    PLAYDAYS: no row found for '{name}'")
+            continue
+
+        try:
+            page.wait_for_timeout(300)
+            # Step 1: snapshot the current day-button state for this row by reading the
+            # associated <input type="checkbox">.checked property (the source of truth).
+            day_states = page.evaluate("""
+                (idx) => {
+                    const rows = document.querySelectorAll('table tbody tr');
+                    if (idx >= rows.length) return [];
+                    const row = rows[idx];
+                    const labels = Array.from(row.querySelectorAll('label.playDay, label.playday'));
+                    return labels.map(l => {
+                        const forId = l.getAttribute('for') || '';
+                        const cb = forId ? document.getElementById(forId) : null;
+                        return {
+                            day: (l.textContent || '').trim(),
+                            checked: cb ? !!cb.checked : false,
+                            forId: forId,
+                        };
+                    });
+                }
+            """, idx)
+
+            if not day_states:
+                log(f"    PLAYDAYS WARNING '{name}': no day buttons found in row")
+                continue
+
+            # Step 2: for each day whose desired state differs from current, click the
+            # label via Playwright (real mouse event → triggers Angular change detection).
+            corrections = []
+            for state in day_states:
+                day = state.get("day", "")
+                if day not in {"Fr", "Sa", "Su", "Mo", "Tu", "We", "Th"}:
+                    continue
+                should_be = day in active_set
+                is_on = bool(state.get("checked"))
+                if should_be == is_on:
+                    corrections.append(f"{day}:keep({'on' if is_on else 'off'})")
+                    continue
+                for_id = state.get("forId", "")
+                try:
+                    if for_id:
+                        label_loc = page.locator(f'label[for="{for_id}"]').first
+                        label_loc.click(timeout=3_000)
+                        corrections.append(f"{day}:{'on' if should_be else 'off'}")
+                    else:
+                        corrections.append(f"{day}:skip(no_for_id)")
+                except Exception as e:
+                    corrections.append(f"{day}:err({type(e).__name__})")
+                page.wait_for_timeout(150)
+
+            log(f"    PLAYDAYS '{name}': {', '.join(corrections)}")
+            count += 1
+            page.wait_for_timeout(400)
+        except Exception as e:
+            log(f"    PLAYDAYS WARNING '{name}': {e}")
+
+    # Click toolbar Save to persist the day-button changes (inline toggles don't auto-save).
+    if count > 0:
+        try:
+            save_result = page.evaluate("""
+                () => {
+                    // Find the toolbar Save button — it's the one OUTSIDE any open dialog.
+                    // Skip disabled buttons. Match exact text "Save".
+                    const btns = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+                    for (const b of btns) {
+                        const t = (b.textContent || '').trim();
+                        if (t !== 'Save') continue;
+                        if (b.closest('[role="dialog"], .modal-content, .modal-dialog')) continue;
+                        if (b.disabled) continue;
+                        const cs = window.getComputedStyle(b);
+                        if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+                        b.click();
+                        b.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                        return 'clicked';
+                    }
+                    return 'not_found_or_disabled';
+                }
+            """)
+            log(f"  PLAYDAYS toolbar Save: {save_result}")
+            page.wait_for_timeout(1500)
+        except Exception as e:
+            log(f"  PLAYDAYS toolbar Save WARNING: {e}")
+
+    return count
+
+
+def _scroll_table_to_render_all_rows(page) -> int:
+    """
+    Scroll the holdover table container to the bottom so Angular renders all rows.
+    Mica may use virtual scrolling; rows off-screen are not in the DOM.
+    Returns the final row count visible in the DOM.
+    """
+    try:
+        # Scroll the page to the bottom in chunks, pausing for Angular to render
+        prev_count = 0
+        for _ in range(20):  # up to 20 scroll steps
+            page.evaluate("""() => {
+                // Try scrolling the scrollable table wrapper first, then fall back to window
+                const scroller = document.querySelector(
+                    '.cdk-virtual-scroll-viewport, .table-container, ' +
+                    '[class*="scroll"], table'
+                );
+                if (scroller) scroller.scrollBy(0, 600);
+                window.scrollBy(0, 600);
+            }""")
+            page.wait_for_timeout(200)
+            count = page.evaluate(
+                "() => document.querySelectorAll('table tbody tr').length"
+            )
+            if count == prev_count:
+                break   # stabilised
+            prev_count = count
+        # Scroll back to top so first rows are still clickable
+        page.evaluate("""() => {
+            const scroller = document.querySelector(
+                '.cdk-virtual-scroll-viewport, .table-container, [class*="scroll"], table'
+            );
+            if (scroller) scroller.scrollTo(0, 0);
+            window.scrollTo(0, 0);
+        }""")
+        page.wait_for_timeout(300)
+        final_count = page.evaluate(
+            "() => document.querySelectorAll('table tbody tr').length"
+        )
+        log(f"  [scroll] Table rows in DOM after scroll-to-render: {final_count}")
+        return final_count
+    except Exception as e:
+        log(f"  [scroll] scroll_table_to_render_all_rows warning: {e}")
+        return 0
+
+
 def _set_status_per_row(page, entries: list[dict], status: str, contact: str = "") -> int:
     """
     Update status by clicking each matching row's individual status button.
@@ -3006,6 +3506,9 @@ def _set_status_per_row(page, entries: list[dict], status: str, contact: str = "
     same theatre has rows for two different films.
     contact: if provided, used to re-apply filter if the page navigates away mid-run.
     """
+    # Ensure all rows are in the DOM (Mica may use virtual scrolling)
+    _scroll_table_to_render_all_rows(page)
+
     count = 0
     seen: set[tuple] = set()
 
@@ -3031,7 +3534,7 @@ def _set_status_per_row(page, entries: list[dict], status: str, contact: str = "
             continue
         alias_note = f" [alias->{lookup_name}]" if lookup_name != name else ""
         label = f"'{name}'{alias_note}" + (f" / '{film}'" if film else "")
-        log(f"    MATCH  {label} -> row {idx} -- {info.get('rowText','')[:60]}")
+        log(f"    MATCH  {label} -> row {idx} [venueCol={info.get('venueCol','?')}] venue='{info.get('venueText','')[:60]}'")
 
         row = page.locator("table tbody tr").nth(idx)
         try:

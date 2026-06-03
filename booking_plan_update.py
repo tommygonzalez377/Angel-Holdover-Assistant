@@ -25,6 +25,7 @@ import os
 import re
 import sys
 import time
+from datetime import date as _dt_date, timedelta as _dt_timedelta
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
@@ -83,301 +84,19 @@ def _parse_action_date(action: str) -> str | None:
 
 def _parse_one_per_line(raw: str) -> list[dict]:
     """Parse one-cell-per-line booking format (email copy-paste).
-    Handles standard format (Action/Policy header), Cinemark __COLUMN__ format,
-    and bare Cinemark format (where email clients strip the __ underscores).
+
+    Delegates to the Holdover module's parser so the Booking Assistant and the
+    Holdover Assistant share ONE parser instead of two copies that drift apart.
+    That parser handles every one-per-line layout (standard Action/Policy,
+    Cinemark __COLUMN__, bare Cinemark DMA/SALES/#/THEATRE/SCR, snake_case,
+    ComScore Theatre #, Landmark Location, small-exhibitor City/ST) and, for the
+    bare Cinemark family, sets a blank Action -> Final and splits the "(City, ST)"
+    suffix into a City field. Keys are lowercased for the Booking downstream.
     """
-    _CINEMARK_BARE = {'DMA', 'SALES', '#', 'THEATRE', 'THEATER', 'SCR', 'SCREENS',
-                      'CHAIN', 'CIRCUIT', 'BRCH', 'BRANCH', 'BOOK', 'PRINTS'}
-    _NAME_MAP = {'SALES': 'buyer', 'THEATRE': 'theatre', 'THEATER': 'theatre',
-                 'SCR': 'screens', '#': 'unit', 'DMA': 'dma', 'BRCH': 'branch',
-                 'BRANCH': 'branch', 'SCREENS': 'screens',
-                 'BOOK': 'action',    # Michael Eiff / Cinemark single-film format
-                 'PRINTS': 'action'}  # Andy Anderson SF Bay Area format
-
-    # Parse preserving space-only lines as empty cell values.
-    # Blank separator lines (truly empty after strip) are skipped.
-    cell_values = []
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if stripped:
-            cell_values.append(stripped)
-        elif len(line) > 0:   # space-only → blank cell
-            cell_values.append('')
-        # truly empty → separator, skip
-
-    values = [v for v in cell_values if v]
-    if not values:
-        return []
-
-    # ── Cinemark __COLUMN__ format (with underscores) ────────────────────────
-    cinemark_hdr_idxs = [i for i, v in enumerate(values) if re.fullmatch(r'__.*__', v)]
-    if cinemark_hdr_idxs:
-        headers = []
-        for i in cinemark_hdr_idxs:
-            h = values[i].strip('_').strip().lower()
-            headers.append(h if h else f"_col{len(headers)}")
-        n_cols    = len(headers)
-        data_vals = values[cinemark_hdr_idxs[-1] + 1:]
-        rows = []
-        for i in range(0, len(data_vals), n_cols):
-            chunk = data_vals[i:i + n_cols]
-            if len(chunk) < n_cols:
-                chunk += [""] * (n_cols - len(chunk))
-            rows.append(dict(zip(headers, chunk)))
-        return rows
-
-    # ── Cinemark DB export format (snake_case headers: theater_name / status) ─
-    _SNAKE_KEYS_BP = {'dma_name', 'city', 'state', 'theater_name', 'theatre_name',
-                      'title', 'status', 'account_name', 'circuit'}
-    _SNAKE_MAP_BP  = {'theater_name': 'theatre', 'theatre_name': 'theatre',
-                      'dma_name': 'dma', 'status': 'action', 'title': 'film',
-                      'city': 'city', 'state': 'state', 'circuit': 'circuit',
-                      'account_name': 'buyer'}
-    _th_name_idx_bp = next((i for i, v in enumerate(values)
-                            if v.lower() in ('theater_name', 'theatre_name')), None)
-    if _th_name_idx_bp is not None:
-        _ss_bp = _th_name_idx_bp
-        while _ss_bp > 0 and values[_ss_bp - 1].lower() in _SNAKE_KEYS_BP:
-            _ss_bp -= 1
-        _snake_hdrs_bp = []
-        _si_bp = _ss_bp
-        while _si_bp < len(values) and values[_si_bp].lower() in _SNAKE_KEYS_BP:
-            _snake_hdrs_bp.append(_SNAKE_MAP_BP.get(values[_si_bp].lower(), values[_si_bp].lower()))
-            _si_bp += 1
-        _n_sn_bp = len(_snake_hdrs_bp)
-        _data_sn_bp = values[_si_bp:]
-        rows = []
-        for _sj in range(0, len(_data_sn_bp), _n_sn_bp):
-            _chunk = list(_data_sn_bp[_sj : _sj + _n_sn_bp])
-            if len(_chunk) < _n_sn_bp:
-                _chunk += [''] * (_n_sn_bp - len(_chunk))
-            _row = dict(zip(_snake_hdrs_bp, _chunk))
-            _al = _row.get('action', '').lower()
-            if 'final' in _al:
-                _row['action'] = 'Final'
-            elif 'hold' in _al:
-                _row['action'] = 'Hold'
-            rows.append(_row)
-        return rows
-
-    # ── Cinemark DMA / City / Theatre / Title / Print / Attributes / Status / Detail ─
-    # Detected when the first 4 non-blank values are: DMA, City, Theatre, Title.
-    # The CSV has a blank line between every individual value (cell separator), so
-    # record boundaries are detected by matching DMA-pattern values in cell_values.
-    if (len(values) >= 4
-            and values[0].lower() == 'dma'
-            and values[1].lower() == 'city'
-            and values[2].lower() in ('theatre', 'theater')
-            and values[3].lower() == 'title'):
-        import re as _re_bp2
-        _DMA_PAT_BP = _re_bp2.compile(r'.+ - .+|.+,\s*[A-Z]{2}$')
-        _data_bp = cell_values[8:]
-        _dma_pos_bp = [_i for _i, _v in enumerate(_data_bp) if _v and _DMA_PAT_BP.match(_v)]
-        if not _dma_pos_bp and _data_bp:
-            _dma0_bp = next((_v for _v in _data_bp if _v), '')
-            _dma_pos_bp = [_i for _i, _v in enumerate(_data_bp) if _v == _dma0_bp]
-        rows = []
-        for _ri_b, _dp_b in enumerate(_dma_pos_bp):
-            _rend_b = _dma_pos_bp[_ri_b + 1] if _ri_b + 1 < len(_dma_pos_bp) else len(_data_bp)
-            _rv_b = _data_bp[_dp_b:_rend_b]
-            _nb_b = [_v for _v in _rv_b if _v]
-            if len(_nb_b) < 3:
-                continue
-            _dma_b, _city_b, _th_b = _nb_b[0], _nb_b[1], _nb_b[2]
-            _nbc_b, _skip_b = 0, len(_rv_b)
-            for _k_b, _cv_b in enumerate(_rv_b):
-                if _cv_b:
-                    _nbc_b += 1
-                    if _nbc_b == 3:
-                        _skip_b = _k_b + 1
-                        break
-            _fv_b = list(_rv_b[_skip_b:])
-            while len(_fv_b) % 5:
-                _fv_b.append('')
-            for _fi_b in range(0, len(_fv_b), 5):
-                _ttl_b, _, _, _sta_b, _dtl_b = _fv_b[_fi_b:_fi_b + 5]
-                if not _ttl_b and not _sta_b:
-                    continue
-                rows.append({'theatre': _th_b, 'dma': _dma_b, 'film': _ttl_b,
-                             'action': _sta_b, 'terms': _dtl_b})
-        return rows
-
-    # ── ComScore booking: Theatre # / ComScore Name / City / ST / Screens / DMA ──
-    # Theatre # = Comscore unit#; unit-based master lookup. Strip parentheticals from name.
-    if (len(values) >= 4
-            and values[0].lower() in ('theatre #', 'theater #')
-            and values[2].lower() == 'city'
-            and values[3].lower() == 'st'):
-        _hdrs_csc_b = ['unit', 'theatre', 'city', 'state', 'screens', 'dma', 'action']
-        _data_csc_b = cell_values[6:]
-        _id_pos_csc_b = [_i for _i, _v in enumerate(_data_csc_b)
-                         if re.fullmatch(r'\d{3,}', _v)]
-        rows = []
-        for _idx_csc_b, _pos_csc_b in enumerate(_id_pos_csc_b):
-            _end_csc_b = (_id_pos_csc_b[_idx_csc_b + 1] if _idx_csc_b + 1 < len(_id_pos_csc_b)
-                          else len(_data_csc_b))
-            _row_csc_b = list(_data_csc_b[_pos_csc_b:_end_csc_b])
-            if len(_row_csc_b) < 7:
-                _row_csc_b += [''] * (7 - len(_row_csc_b))
-            _d_csc_b = dict(zip(_hdrs_csc_b, _row_csc_b[:7]))
-            _th_csc_b = re.sub(r'\s*\([^)]*\)', '', _d_csc_b['theatre']).strip()
-            rows.append({'unit': _d_csc_b['unit'], 'theatre': _th_csc_b,
-                         'city': _d_csc_b['city'], 'action': _d_csc_b['action']})
-        return rows
-
-    # ── Landmark "Location" format: 2-column vertical (Theatre / Status) ────────
-    # Data may be one-per-line alternating pairs OR tab/comma-separated rows.
-    _loc_idx_bp = next((i for i, v in enumerate(values[:8]) if v.lower() == 'location'), None)
-    if _loc_idx_bp is not None:
-        _film_bp = values[0] if _loc_idx_bp > 0 else ''
-        _data_bp_lm = values[_loc_idx_bp + 1:]
-        rows = []
-        # Detect inline separator (tab or comma embedded in values)
-        _sep_bp = None
-        for _sv_bp in _data_bp_lm[:4]:
-            if '\t' in _sv_bp:
-                _sep_bp = '\t'; break
-            if ',' in _sv_bp:
-                _sep_bp = ','; break
-        def _lm_row_bp(th, st):
-            _al = st.lower()
-            if 'closed' in _al and 'no opening' in _al:
-                return None
-            _act = 'Final' if 'finished' in _al else 'Hold'
-            return {'theatre': th, 'film': _film_bp, 'action': _act, 'phrase': st}
-        if _sep_bp:
-            for _entry_bp in _data_bp_lm:
-                _parts_bp = _entry_bp.split(_sep_bp, 1)
-                _r = _lm_row_bp(_parts_bp[0].strip(),
-                                 _parts_bp[1].strip() if len(_parts_bp) > 1 else '')
-                if _r:
-                    rows.append(_r)
-        else:
-            for _fi_bp in range(0, len(_data_bp_lm), 2):
-                _r = _lm_row_bp(_data_bp_lm[_fi_bp],
-                                 _data_bp_lm[_fi_bp + 1] if _fi_bp + 1 < len(_data_bp_lm) else '')
-                if _r:
-                    rows.append(_r)
-        return rows
-
-    # ── Bare Cinemark format (no underscores — email clients strip __ markers) ─
-    bare_start = None
-    for i, v in enumerate(cell_values):
-        if v.upper() in _CINEMARK_BARE:
-            subsequent = [cell_values[j] for j in range(i + 1, min(i + 6, len(cell_values)))]
-            if any(s.upper() in _CINEMARK_BARE for s in subsequent):
-                bare_start = i
-                break
-
-    if bare_start is not None:
-        headers = []
-        blank_count = 0
-        i = bare_start
-        while i < len(cell_values):
-            v = cell_values[i]
-            if v.upper() in _CINEMARK_BARE or v == '#':
-                headers.append(_NAME_MAP.get(v.upper(), v.lower()))
-                blank_count = 0
-                i += 1
-            elif v == '' and blank_count < 2:
-                headers.append('action' if blank_count == 0 else 'terms')
-                blank_count += 1
-                i += 1
-            else:
-                break
-        # Always ensure action and terms columns exist
-        if 'action' not in headers:
-            headers.append('action')
-        if 'terms' not in headers:
-            headers.append('terms')
-        n_cols    = len(headers)
-        data_vals = cell_values[i:]
-
-        # Find theatre column offset for row-boundary detection
-        _th_col = next((h for h in headers if h in ('theatre', 'theater')), None)
-        _th_off = headers.index(_th_col) if _th_col is not None else None
-        _THEATRE_RE = re.compile(r'\([^)]*,\s*[A-Z]{2}\)', re.IGNORECASE)
-
-        if _th_off is not None and blank_count == 0:
-            # No blank separators → variable-length rows; anchor on Theatre "(City, ST)"
-            th_positions = [j for j, v in enumerate(data_vals) if _THEATRE_RE.search(v)]
-            rows = []
-            for idx, th_pos in enumerate(th_positions):
-                row_start = th_pos - _th_off
-                if row_start < 0:
-                    continue
-                if idx + 1 < len(th_positions):
-                    row_end = th_positions[idx + 1] - _th_off
-                else:
-                    row_end = len(data_vals)
-                row_data = list(data_vals[row_start : row_end])
-                if len(row_data) < n_cols:
-                    row_data += [''] * (n_cols - len(row_data))
-                rows.append(dict(zip(headers, row_data[:n_cols])))
-            return rows
-        else:
-            # Blank separators present → fixed-length rows
-            rows = []
-            for j in range(0, len(data_vals), n_cols):
-                chunk = data_vals[j:j + n_cols]
-                if len(chunk) < n_cols:
-                    chunk += [''] * (n_cols - len(chunk))
-                rows.append(dict(zip(headers, chunk)))
-            return rows
-
-    # ── Small-exhibitor city+state format: "City, State   HOLD/Final" ──────────
-    # e.g. "Ark City, KS       HOLD"  or  "Florence, SC        Final"
-    _CS_RE_BP = re.compile(r'^(.*\S)\s+(HOLD|FINAL|OPEN|CONFIRMED)\s*$', re.IGNORECASE)
-    _SS_RE_BP = re.compile(r'^(.*?),?\s*([A-Z]{2})\s*$')
-    _nonempty_bp = [l.strip() for l in raw.splitlines() if l.strip()]
-    if _nonempty_bp:
-        _cs_hits_bp = sum(1 for _l in _nonempty_bp if _CS_RE_BP.match(_l))
-        if _cs_hits_bp / len(_nonempty_bp) >= 0.70:
-            rows = []
-            for _line in _nonempty_bp:
-                _cm = _CS_RE_BP.match(_line)
-                if not _cm:
-                    continue
-                _loc    = _cm.group(1).strip()
-                _stat   = _cm.group(2).strip()
-                _action = 'Final' if 'final' in _stat.lower() else 'Hold'
-                rows.append({'theatre': _loc, 'action': _action})  # "City, ST" gives 2 match words
-            return rows
-
-    # ── Standard Action/Policy format ────────────────────────────────────────
-    action_idx = next(
-        (i for i, v in enumerate(values) if v.lower() in ("action", "policy")), None
-    )
-    if action_idx is None:
-        return []
-    KNOWN = {"buyer","br","unit","theatre","theater","attraction","film",
-             "title","type","media","prt","comscore","comscore #","#"}
-    header_start = next(
-        (i for i in range(action_idx + 1) if values[i].lower() in KNOWN), 0
-    )
-    headers   = values[header_start:action_idx + 1]
-    n_cols    = len(headers)
-    remainder = values[action_idx + 1:]
-    if not remainder:
-        return []
-    if any(p in headers[0].lower() for p in ("unit", "comscore", "#")):
-        id_pos = [i for i, v in enumerate(remainder) if re.fullmatch(r"\d{3,}", v)]
-        if id_pos:
-            rows = []
-            for idx, pos in enumerate(id_pos):
-                end = id_pos[idx + 1] if idx + 1 < len(id_pos) else len(remainder)
-                row = list(remainder[pos:end])
-                if len(row) < n_cols:
-                    row += [""] * (n_cols - len(row))
-                rows.append(dict(zip(headers, row[:n_cols])))
-            return rows
-    rows = []
-    for i in range(0, len(remainder), n_cols):
-        chunk = remainder[i:i + n_cols]
-        if len(chunk) < n_cols:
-            chunk += [""] * (n_cols - len(chunk))
-        rows.append(dict(zip(headers, chunk)))
-    return rows
+    import mica_update as _mu
+    rows = _mu._parse_one_per_line_to_dicts(raw)
+    return [{(k.lower() if isinstance(k, str) else k): v for k, v in r.items()}
+            for r in rows]
 
 
 def _parse_delimited(text: str, delim: str) -> list[dict]:
@@ -486,7 +205,9 @@ def _is_active_action(action: str) -> bool:
     """
     Return True if the booking row should be treated as active/open.
     Accepts: blank (Cinemark format), "Open ...", "Hold", "Final", "Confirm",
-             "Tentative", or any known screening type phrase (e.g. "Clean", "MATS+EE").
+             "Tentative", "Need keys ..." (Jennifer Hernandez / Regal — the
+             group-needs-keys-on date pattern), or any known screening type
+             phrase (e.g. "Clean", "MATS+EE").
     Rejects: Cancelled, Declined, etc.
     """
     al = action.strip().lower()
@@ -504,6 +225,8 @@ def _is_active_action(action: str) -> bool:
         return True
     if "tentative" in al:
         return True
+    if "need key" in al:
+        return True          # "need keys for a group on MM/DD" — Jennifer Hernandez / Regal
     if _is_screening_phrase(al):
         return True          # screening type phrase = active booking
     return False             # Cancelled, Declined, etc.
@@ -1005,6 +728,83 @@ def _watson_showtime_label(showtime: str) -> str:
     return _bp_screening_label(showtime)
 
 
+def _parse_bb_date_range(date_str: str) -> tuple[str, str, list]:
+    """
+    Parse a bring-back Date cell into (start_MM/DD, end_MM/DD, explicit_dates).
+    Handles:
+      "6/1"           → ("06/01", "06/01", [])
+      "6/8-11"        → ("06/08", "06/11", [])   full range — all days apply
+      "6/1-6/5"       → ("06/01", "06/05", [])   full range
+      "6/15 and 6/17" → ("06/15", "06/17", ["06/15","06/17"])  specific days only
+    explicit_dates is non-empty only for the "X and Y" format.  The caller uses it
+    to deselect any gap days (e.g. the Monday between Sunday 5/25 and Tuesday 5/27).
+    """
+    s = date_str.strip()
+    # M/D-M/D  e.g. "6/1-6/5"
+    m = re.match(r'^(\d{1,2})/(\d{1,2})-(\d{1,2})/(\d{1,2})', s)
+    if m:
+        sm, sd, em, ed = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        return (f"{sm:02d}/{sd:02d}", f"{em:02d}/{ed:02d}", [])
+    # M/D-D  e.g. "6/8-11"
+    m = re.match(r'^(\d{1,2})/(\d{1,2})-(\d{1,2})(?!\d*/)', s)
+    if m:
+        mo, sd, ed = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return (f"{mo:02d}/{sd:02d}", f"{mo:02d}/{ed:02d}", [])
+    # Two or more M/D patterns  e.g. "6/15 and 6/17"
+    dates = re.findall(r'(\d{1,2})/(\d{1,2})', s)
+    if len(dates) >= 2:
+        explicit = [f"{int(d[0]):02d}/{int(d[1]):02d}" for d in dates]
+        return (explicit[0], explicit[-1], explicit)
+    if len(dates) == 1:
+        d = f"{int(dates[0][0]):02d}/{int(dates[0][1]):02d}"
+        return (d, d, [])
+    return ("", "", [])
+
+
+def _parse_bring_back_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse David bring-back booking format.
+    Tab-delimited: Theater | City, ST | Title | Date | Format | Admission charged?
+    Date column values: "6/15 and 6/17", "6/8-11", "6/1-6/5", "6/1", etc.
+    Returns {film_title: [{"theatre": str, "date": "MM/DD", "end_date": "MM/DD"}, ...]}
+    where date/end_date are the actual first/last play dates (not Fridays).
+    """
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines or '\t' not in lines[0]:
+        return {}
+    hdrs = [h.lower().strip() for h in lines[0].split('\t')]
+    theatre_col = 'theater' if 'theater' in hdrs else ('theatre' if 'theatre' in hdrs else None)
+    if theatre_col is None or 'date' not in hdrs or 'title' not in hdrs:
+        return {}
+
+    i_theatre = hdrs.index(theatre_col)
+    i_title   = hdrs.index('title')
+    i_date    = hdrs.index('date')
+
+    results: dict[str, list[dict]] = {}
+    for line in lines[1:]:
+        cells = [c.strip() for c in line.split('\t')]
+        def _g(idx): return cells[idx] if 0 <= idx < len(cells) else ""
+        theatre  = _g(i_theatre)
+        film     = _g(i_title)
+        date_raw = _g(i_date)
+        if not theatre or not film:
+            continue
+        start, end, explicit = _parse_bb_date_range(date_raw)
+        results.setdefault(film, []).append({
+            "theatre":        theatre,
+            "date":           start or None,
+            "end_date":       end or None,
+            "explicit_dates": explicit,   # non-empty for "X and Y" format
+        })
+
+    if not results:
+        return {}
+    log(f"  [bring-back-format] Detected bring-back format — "
+        f"{sum(len(v) for v in results.values())} venue(s) across {len(results)} film(s)")
+    return results
+
+
 def _parse_watson_booking(text: str) -> dict[str, list[dict]]:
     """
     Parse Richard/Cathy Watson (Imagine/Cinestarz Canada) booking format.
@@ -1249,6 +1049,48 @@ def _parse_landmark_canada_booking(text: str) -> dict[str, list[dict]]:
     return results
 
 
+_CINEPOLIS_CITY_SUFFIX = re.compile(r'\s*\([^)]+,\s*[A-Z]{2}\)')
+
+
+def _parse_cinepolis_booking(text: str) -> dict[str, list[dict]]:
+    """
+    Parse Tearlach Hutcheson (Cinepolis / Moviehouse & Eatery) 3-line-per-venue format:
+        Venue Name (City, ST)
+        FINAL|HOLD
+        Film Title
+
+    Detected by ≥2 standalone FINAL/HOLD lines in the text.
+    Strips "(City, ST)" suffix and "aka ..." annotation from venue names.
+    """
+    _lines = [l.strip() for l in text.splitlines()]
+    _action_lines = [i for i, l in enumerate(_lines) if l.upper() in ('FINAL', 'HOLD')]
+    if len(_action_lines) < 2:
+        return {}
+    # Confirm triplet pattern: line before = venue, line after = film
+    _valid = [i for i in _action_lines
+              if i > 0 and i + 1 < len(_lines)
+              and _lines[i - 1] and _lines[i + 1]
+              and _lines[i + 1].upper() not in ('FINAL', 'HOLD')]
+    if len(_valid) < 2:
+        return {}
+
+    results: dict[str, list[dict]] = {}
+    for i in _valid:
+        _raw_th = _lines[i - 1]
+        _action  = _lines[i].upper()
+        _film    = _lines[i + 1]
+        # Strip "(City, ST)" anywhere in name (may precede "aka ...")
+        _th = ' '.join(_CINEPOLIS_CITY_SUFFIX.sub('', _raw_th).split())
+        _phrase = 'final' if _action == 'FINAL' else 'hold'
+        results.setdefault(_film, []).append({'theatre': _th, 'date': None, 'phrase': _phrase})
+
+    if not results:
+        return {}
+    log(f"  [cinepolis] Detected Cinepolis 3-line format — "
+        f"{sum(len(v) for v in results.values())} venue(s) across {len(results)} film(s)")
+    return results
+
+
 def _parse_holdover_grid_booking(text: str) -> dict[str, list[dict]]:
     """
     Parse indie-circuit holdover grid format (e.g. David Saunders / Pacific NW).
@@ -1315,6 +1157,126 @@ def _parse_holdover_grid_booking(text: str) -> dict[str, list[dict]]:
     return results
 
 
+# ---------------------------------------------------------------------------
+# Jeff Kaufman / Malco Theatres — 5-line block booking format
+# Each block: CITY STATE / VENUE / DISTRIBUTOR / FILM / STATUS[MODIFIER]
+# F = Final, H = Hold, F TU = Hold (finals Tuesday) — all active, include venue
+# ---------------------------------------------------------------------------
+
+_KAUFMAN_STATUS_PAT_BPA = re.compile(r'^[FH](\s+\S.*)?$', re.IGNORECASE)
+
+def _is_kaufman_format_bpa(text: str) -> bool:
+    """Detect Jeff Kaufman / Malco 5-line block booking format.
+    Works whether or not blank lines separate the 5-line blocks."""
+    lines = [l.strip() for l in text.splitlines()]
+
+    # Case 1: blank lines present — split into blocks
+    blocks, cur = [], []
+    for l in lines:
+        if l:
+            cur.append(l)
+        elif cur:
+            blocks.append(cur); cur = []
+    if cur:
+        blocks.append(cur)
+    if len(blocks) >= 2:
+        matches = sum(1 for b in blocks if len(b) >= 4 and _KAUFMAN_STATUS_PAT_BPA.match(b[-1]))
+        if matches >= 2:
+            return True
+
+    # Case 2: no blank lines — check if every 5th non-empty line (offset 4) matches F/H
+    nonempty = [l for l in lines if l]
+    if len(nonempty) >= 10 and len(nonempty) % 5 == 0:
+        status_lines = [nonempty[i] for i in range(4, len(nonempty), 5)]
+        matches = sum(1 for s in status_lines if _KAUFMAN_STATUS_PAT_BPA.match(s))
+        if matches >= max(2, len(status_lines) * 0.8):
+            return True
+
+    return False
+
+
+def _parse_kaufman_booking_bpa(text: str) -> dict[str, list[dict]]:
+    """
+    Parse Jeff Kaufman / Malco 5-line block booking for the Booking Assistant.
+    Returns {film_title: [{"theatre": str, "date": None}, ...]}.
+    F, H, and F+modifier are all active — all venues included.
+    """
+    try:
+        from venue_aliases import CITY_VENUE_ALIASES as _kauf_aliases
+    except ImportError:
+        _kauf_aliases = {}
+
+    def _city_alias(name: str, city: str) -> str:
+        city_l = city.lower().strip()
+        k1 = f"{name.lower().strip()}, {city_l}"
+        if k1 in _kauf_aliases:
+            return _kauf_aliases[k1]
+        k2 = name.lower().strip()
+        return _kauf_aliases.get(k2, name)
+
+    lines = [l.strip() for l in text.splitlines()]
+
+    # Build blocks — handle both blank-line-separated and no-blank-lines cases
+    blocks, cur = [], []
+    for l in lines:
+        if l:
+            cur.append(l)
+        elif cur:
+            blocks.append(cur); cur = []
+    if cur:
+        blocks.append(cur)
+
+    # If only 1 block (no blank lines), split into 5-line sub-blocks
+    if len(blocks) == 1 and len(blocks[0]) >= 10 and len(blocks[0]) % 5 == 0:
+        flat = blocks[0]
+        blocks = [flat[i:i+5] for i in range(0, len(flat), 5)]
+
+    results: dict[str, list[dict]] = {}
+    for block in blocks:
+        if len(block) < 4:
+            continue
+        parts = block[0].split()
+        if len(parts) < 2:
+            continue
+        city  = ' '.join(parts[:-1]).title()   # "Ft Smith" from "FT SMITH ARK"
+        venue = block[1]                        # raw venue name (e.g. "SOUTHAVEN")
+        film  = block[3] if len(block) > 3 else ""
+        status_line = (block[4] if len(block) > 4 else block[-1]).upper()
+        if not _KAUFMAN_STATUS_PAT_BPA.match(status_line):
+            continue
+        # Apply city alias to get the real Mica venue name
+        venue = _city_alias(venue, city)
+        film  = film.strip() or "Unknown"
+        results.setdefault(film, []).append({"theatre": venue, "date": None})
+        log(f"  [kaufman-bpa] {venue} / {film}")
+
+    if results:
+        total = sum(len(v) for v in results.values())
+        log(f"  [kaufman-bpa] Detected Kaufman/Malco 5-line format — {total} venue(s) across {len(results)} film(s)")
+    return results
+
+
+def _is_cinemark_oneperline(text: str) -> bool:
+    """True when the booking is a one-cell-per-line Cinemark columnar layout
+    (DMA/SALES/#/THEATRE/SCR header, dunder __COLUMN__, or ComScore Theatre #).
+    Such inputs must go to the shared one-per-line parser and NOT be hijacked by
+    the line-pattern specialized parsers — e.g. _parse_cinepolis_booking fires on
+    >=2 standalone FINAL/HOLD lines, which a per-row Action column produces."""
+    cells = [l.strip() for l in text.splitlines() if l.strip()]
+    if not cells:
+        return False
+    _BARE = {'DMA', 'SALES', '#', 'THEATRE', 'THEATER', 'SCR', 'SCREENS',
+             'BRCH', 'BRANCH', 'BOOK', 'PRINTS', 'CHAIN', 'CIRCUIT'}
+    head = cells[:12]
+    if sum(1 for c in head if c.upper() in _BARE) >= 3:
+        return True
+    if any(re.fullmatch(r'__.*__', c) for c in head):
+        return True
+    if cells[0].lower() in ('theatre #', 'theater #'):
+        return True
+    return False
+
+
 def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     """
     Parse booking text and return:
@@ -1326,34 +1288,51 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
     if not text or not text.strip():
         return {}
 
-    # ── Watson/Imagine/Cinestarz Canada: Booking Week|Group|Theatre Name|O/H ───
-    _wt_result = _parse_watson_booking(text)
-    if _wt_result:
-        return _wt_result
-    # ── Landmark Cinemas Canada (Nathan Gendron): Studio|Cinema|Film|showtimes ──
-    _lc_result = _parse_landmark_canada_booking(text)
-    if _lc_result:
-        return _lc_result
-    # ── Cineplex/policy format: Theatre# - ABBREV Name / Title / Screening ──────
-    _cx_result = _parse_cineplex_policy_booking(text)
-    if _cx_result:
-        return _cx_result
-    # ── Diane Johnson circuit-grid format: early detection ───────────────────
-    _dj_result = _parse_diane_johnson_booking(text)
-    if _dj_result:
-        return _dj_result
-    # ── Glen Parham / GTC format: early detection before generic parsers ──────
-    _gp_result = _parse_glen_parham_booking(text)
-    if _gp_result:
-        return _gp_result
-    # ── Blue Smiley / CFB Rentrak-grid: Rentrak ID|CIRCUIT|THEATRE|TITLE ─────
-    _bs_result = _parse_blue_smiley_booking(text)
-    if _bs_result:
-        return _bs_result
-    # ── Holdover grid (David Saunders / indie circuits): PRELIMINARY HOLD OVERS
-    _hg_result = _parse_holdover_grid_booking(text)
-    if _hg_result:
-        return _hg_result
+    # Cinemark columnar one-per-line layouts must use the shared parser;
+    # skip the line-pattern specialized parsers that false-positive on them.
+    if not _is_cinemark_oneperline(text):
+        # ── Jeff Kaufman / Malco 5-line block format (CITY STATE / VENUE / DIST / FILM / STATUS) ──
+        if _is_kaufman_format_bpa(text):
+            _kf_result = _parse_kaufman_booking_bpa(text)
+            if _kf_result:
+                return _kf_result
+
+        # ── David bring-back: Theater|City,ST|Title|Date|Format|Admission ───────────
+        _bb_result = _parse_bring_back_booking(text)
+        if _bb_result:
+            return _bb_result
+        # ── Watson/Imagine/Cinestarz Canada: Booking Week|Group|Theatre Name|O/H ───
+        _wt_result = _parse_watson_booking(text)
+        if _wt_result:
+            return _wt_result
+        # ── Landmark Cinemas Canada (Nathan Gendron): Studio|Cinema|Film|showtimes ──
+        _lc_result = _parse_landmark_canada_booking(text)
+        if _lc_result:
+            return _lc_result
+        # ── Cineplex/policy format: Theatre# - ABBREV Name / Title / Screening ──────
+        _cx_result = _parse_cineplex_policy_booking(text)
+        if _cx_result:
+            return _cx_result
+        # ── Diane Johnson circuit-grid format: early detection ───────────────────
+        _dj_result = _parse_diane_johnson_booking(text)
+        if _dj_result:
+            return _dj_result
+        # ── Glen Parham / GTC format: early detection before generic parsers ──────
+        _gp_result = _parse_glen_parham_booking(text)
+        if _gp_result:
+            return _gp_result
+        # ── Blue Smiley / CFB Rentrak-grid: Rentrak ID|CIRCUIT|THEATRE|TITLE ─────
+        _bs_result = _parse_blue_smiley_booking(text)
+        if _bs_result:
+            return _bs_result
+        # ── Holdover grid (David Saunders / indie circuits): PRELIMINARY HOLD OVERS
+        _hg_result = _parse_holdover_grid_booking(text)
+        if _hg_result:
+            return _hg_result
+        # ── Cinepolis / Moviehouse 3-line-per-venue: VenueName / FINAL|HOLD / Film ──
+        _cp_result = _parse_cinepolis_booking(text)
+        if _cp_result:
+            return _cp_result
     # ──────────────────────────────────────────────────────────────────────────
 
     lines    = [l for l in text.splitlines() if l.strip()]
@@ -1395,7 +1374,8 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
 
         date = _parse_action_date(action)   # "MM/DD" or None
         film = film.strip() or preamble_film or "Unknown"
-        results.setdefault(film, []).append({"theatre": theatre.strip(), "date": date})
+        results.setdefault(film, []).append({"theatre": theatre.strip(), "date": date,
+                                             "city": fl.get("city", "")})
 
     # Fallback: try Caribbean/Puerto Rico booking format
     if not results:
@@ -1559,7 +1539,7 @@ def _navigate_to_plans(page, ctx):
         sys.exit(1)
 
 
-def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: str = "demo", filter_type: str = "contact_person"):
+def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: str = "demo", filter_type: str = "contact_person", plan_desc: str = ""):
     """Execute booking plan updates for all films using an existing page/ctx."""
     for film, entries in films_theatres.items():
         theatre_names = [e["theatre"] for e in entries]
@@ -1578,9 +1558,18 @@ def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: s
             except PlaywrightTimeout:
                 pass
 
+        # Wait for Angular to finish rendering ng-select filters before interacting.
+        # domcontentloaded fires before Angular bootstraps — without this wait the
+        # Production ng-select doesn't exist yet and _search_plans_for_title times out.
+        try:
+            page.wait_for_selector("ng-select", timeout=20_000)
+            page.wait_for_timeout(400)
+        except PlaywrightTimeout:
+            log("  WARNING: ng-select not found after 20s — plans page may not have loaded")
+
         log(f"Looking for plan: '{film}' ...")
         _search_plans_for_title(page, film)
-        if not _find_and_click_plan(page, film, mode=mode):
+        if not _find_and_click_plan(page, film, mode=mode, plan_desc=plan_desc):
             log(f"  ERROR: Plan not found for '{film}'")
             log(f"  Tip: Verify the title matches exactly in Mica → Sales → Plans")
             _screenshot(page, f"bp_{_safe(film)}_not_found.png")
@@ -1604,11 +1593,17 @@ def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: s
         log(f"  Plan default start date: {plan_default_date or 'unknown'}")
         _screenshot(page, f"bp_{_safe(film)}_detail.png")
 
+        # Expand page size FIRST so the per-page change doesn't clear the
+        # buyer filter that we're about to set (changing page size can
+        # trigger a table reload that resets Angular filter state).
+        _expand_table_page_size(page)
+
         log(f"  Filtering by {filter_type}: {contact!r} ...")
         _filter_by_buyer(page, contact, filter_type=filter_type)
         _screenshot(page, f"bp_{_safe(film)}_filtered.png")
+        # Extra settle time — Angular may do a server round-trip after filter
+        page.wait_for_timeout(2_000)
 
-        _expand_table_page_size(page)
         count = _count_table_rows(page)
         log(f"  Venues for {contact!r}: {count}")
         if count == 0:
@@ -1622,21 +1617,23 @@ def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: s
 
         # Group entries by screening type label ('' = Clean/default)
         from collections import defaultdict as _dd
-        groups: dict[str, list[str]] = _dd(list)
+        groups: dict[str, list[dict]] = _dd(list)
         for e in entries:
             label = _bp_screening_label(e.get("phrase", ""))
-            groups[label].append(e["theatre"])
+            groups[label].append(e)
 
         has_multiple_groups = len(groups) > 1
         total_selected = 0
 
-        for st_label, group_theatres in groups.items():
+        for st_label, group_entries in groups.items():
             if has_multiple_groups:
                 _clear_all_selections(page)
 
+            group_theatres = [e["theatre"] for e in group_entries]
+            group_cities   = [e.get("city", "") for e in group_entries]
             log(f"  Matching {len(group_theatres)} theatre(s)"
                 f"{' [' + (st_label or 'Clean') + ']' if has_multiple_groups else ''} ...")
-            mr = _select_matching_venues(page, group_theatres)
+            mr = _select_matching_venues(page, group_theatres, cities=group_cities)
             n  = mr["selected"]
             log(f"  Selected {n} matching venue(s)")
             if n == 0:
@@ -1669,10 +1666,26 @@ def _run_films_in_browser(page, ctx, films_theatres: dict, contact: str, mode: s
             ]
             if non_default:
                 log(f"  Updating playweek dates for {len(non_default)} venue(s) ...")
+                # Group venues by (start_date, end_date, skip_days) so we open the
+                # modal once per unique date group.  skip_days handles "X and Y"
+                # formats where gap days (e.g. Monday between Su 5/25 and Tu 5/27)
+                # must be deselected in the Playweeks modal.
+                from collections import defaultdict as _dd
+                date_groups: dict = _dd(list)
                 for e in non_default:
-                    full = _full_date(e["date"], plan_default_date)
-                    log(f"    {e['theatre']}  →  {full}")
-                    _update_venue_playweek(page, e["theatre"], full)
+                    full     = _full_date(e["date"], plan_default_date)
+                    full_end = _full_date(e.get("end_date", ""), plan_default_date) if e.get("end_date") else ""
+                    mica_name = _CITY_VENUE_ALIASES.get(e["theatre"].lower().strip(), e["theatre"])
+                    # Compute which day buttons to deselect for "X and Y" formats
+                    skip: tuple = ()
+                    if e.get("explicit_dates") and full and full_end and full != full_end:
+                        explicit_full = [_full_date(d, plan_default_date) for d in e["explicit_dates"]]
+                        skip = tuple(_gap_weekdays(full, full_end, explicit_full))
+                    log(f"    {e['theatre']}  →  {full}" + (f" – {full_end}" if full_end else "")
+                        + (f"  (skip: {', '.join(skip)})" if skip else ""))
+                    date_groups[(full, full_end, skip)].append(mica_name)
+                for (start_date, end_date, skip_days), mica_names in date_groups.items():
+                    _update_playweeks_for_group(page, mica_names, start_date, end_date, list(skip_days))
             else:
                 log("  All venues open on the default date — no playweek updates needed")
 
@@ -1730,6 +1743,15 @@ def run_daemon(mode: str = "demo"):
                 contact      = job.get("contact", "")
                 booking_text = job.get("booking_text", "")
                 filter_type  = job.get("filter_type", "contact_person")
+                plan_desc    = job.get("plan_desc", "")
+
+                # Diagnostic: show first line of booking text so parse failures are visible
+                _bt_lines = [l for l in booking_text.splitlines() if l.strip()]
+                if _bt_lines:
+                    _has_tab = '\t' in _bt_lines[0]
+                    log(f"  [parse] booking text: {len(_bt_lines)} line(s), header={'TAB-sep' if _has_tab else 'no-tabs'}: {repr(_bt_lines[0][:80])}")
+                else:
+                    log("  [parse] booking text: EMPTY")
 
                 films_theatres = parse_open_bookings(booking_text)
                 if not films_theatres:
@@ -1740,6 +1762,7 @@ def run_daemon(mode: str = "demo"):
                             log(f"  Detected plain theatre list — {len(bare)} theatre(s)")
                             films_theatres = {title: bare}
                         else:
+                            log(f"  WARNING: No venues parsed from booking text — proceeding with empty list for '{title}'")
                             films_theatres = {title: []}
                     elif title:
                         films_theatres = {title: []}
@@ -1753,7 +1776,15 @@ def run_daemon(mode: str = "demo"):
                         (k for k in films_theatres
                          if title.lower() in k.lower() or k.lower() in title.lower()), None
                     )
-                    films_theatres = {match: films_theatres[match]} if match else {title: films_theatres.get(title, [])}
+                    if match:
+                        films_theatres = {match: films_theatres[match]}
+                    elif len(films_theatres) == 1:
+                        # Single parsed group whose key doesn't name the film (e.g. bare
+                        # Cinemark has no film title → key "Unknown"). The Title field is
+                        # authoritative — carry the theatres over instead of dropping them.
+                        films_theatres = {title: next(iter(films_theatres.values()))}
+                    else:
+                        films_theatres = {title: films_theatres.get(title, [])}
 
                 # Make sure we're on the plans page before each job
                 if page.url.rstrip("/") != MICA_PLANS_URL.rstrip("/"):
@@ -1763,7 +1794,7 @@ def run_daemon(mode: str = "demo"):
                     except PlaywrightTimeout:
                         pass
 
-                _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode, filter_type=filter_type)
+                _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode, filter_type=filter_type, plan_desc=plan_desc)
                 log("\n✓ Booking plan update complete!")
                 print("__JOB_DONE__", flush=True)
 
@@ -1787,7 +1818,7 @@ def run_daemon(mode: str = "demo"):
                         _navigate_to_plans(page, ctx)
                         log("[daemon] Browser relaunched — retrying job ...")
                         try:
-                            _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode, filter_type=filter_type)
+                            _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode, filter_type=filter_type, plan_desc=plan_desc)
                             log("\n✓ Booking plan update complete!")
                             print("__JOB_DONE__", flush=True)
                         except Exception as retry_exc:
@@ -1808,7 +1839,7 @@ def run_daemon(mode: str = "demo"):
             pass
 
 
-def run_booking_plan_update(title: str, contact: str, booking_text: str = "", filter_type: str = "contact_person", mode: str = "demo"):
+def run_booking_plan_update(title: str, contact: str, booking_text: str = "", filter_type: str = "contact_person", mode: str = "demo", plan_desc: str = ""):
     """
     For each film found in booking_text with 'Open' actions:
       - If `title` is given, process only that film.
@@ -1848,6 +1879,11 @@ def run_booking_plan_update(title: str, contact: str, booking_text: str = "", fi
         )
         if match:
             films_theatres = {match: films_theatres[match]}
+        elif len(films_theatres) == 1:
+            # Single parsed group whose key doesn't name the film (e.g. bare Cinemark
+            # has no film title → key "Unknown"). Title field is authoritative.
+            log(f"Single parsed group — using its theatres under title '{title}'")
+            films_theatres = {title: next(iter(films_theatres.values()))}
         else:
             log(f"WARNING: '{title}' not found in parsed rows — using theatre list as-is")
             films_theatres = {title: films_theatres.get(title, [])}
@@ -1875,7 +1911,7 @@ def run_booking_plan_update(title: str, contact: str, booking_text: str = "", fi
 
     try:
         _navigate_to_plans(page, ctx)
-        _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode, filter_type=filter_type)
+        _run_films_in_browser(page, ctx, films_theatres, contact, mode=mode, filter_type=filter_type, plan_desc=plan_desc)
         log("\n✓ Booking plan update complete!")
 
         # Keep browser open for review (local mode only)
@@ -1910,7 +1946,10 @@ def _safe(name: str) -> str:
 def _full_date(mm_dd: str, reference_date: str) -> str:
     """
     Given 'MM/DD' from the booking sheet and the plan's full date 'MM/DD/YYYY',
-    return the full 'MM/DD/YYYY' using the plan's year.
+    return the full 'MM/DD/YYYY' using the plan's year — or next year if that
+    date is already in the past.  This handles bring-back bookings where the
+    plan's release date is from a previous year (e.g. David opened in 2025 but
+    bring-back dates are in 2026).
     If reference_date is empty, returns mm_dd unchanged.
     """
     if not mm_dd:
@@ -1918,7 +1957,20 @@ def _full_date(mm_dd: str, reference_date: str) -> str:
     if len(mm_dd) > 5:        # already has year
         return mm_dd
     year = reference_date[-4:] if reference_date and len(reference_date) >= 4 else ""
-    return f"{mm_dd}/{year}" if year else mm_dd
+    if not year:
+        return mm_dd
+    candidate = f"{mm_dd}/{year}"
+    # If the resulting date is already in the past, bump to the next year.
+    # This ensures bring-back bookings (e.g. summer 2026) are not stamped with
+    # the plan's original theatrical year (e.g. 2025).
+    try:
+        from datetime import date as _d
+        m_v, d_v, y_v = int(mm_dd[:2]), int(mm_dd[3:5]), int(year)
+        if _d(y_v, m_v, d_v) < _d.today():
+            candidate = f"{mm_dd}/{y_v + 1}"
+    except Exception:
+        pass
+    return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -2132,8 +2184,11 @@ def _search_plans_for_title(page, title: str):
             if opt_text.lower() not in ("no items found", ""):
                 opt.click()
                 page.wait_for_timeout(800)
-                sel_label = (prod_sel.locator('.ng-value-label, .ng-value').first.text_content() or '').strip()
-                log(f"  Production filter set: '{sel_label}'" if sel_label else "  WARNING: Production filter may not have applied")
+                try:
+                    sel_label = (prod_sel.locator('.ng-value-label, .ng-value').first.text_content(timeout=2_000) or '').strip()
+                except Exception:
+                    sel_label = ""
+                log(f"  Production filter set: '{sel_label}'" if sel_label else "  Production filter applied (label not readable)")
             else:
                 page.keyboard.press("Escape")
                 log(f"  WARNING: Production '{title}' not found in dropdown — searching without filter")
@@ -2197,11 +2252,25 @@ def _search_plans_for_title(page, title: str):
         if search_btn.count() > 0:
             search_btn.click()
             log("  Search clicked")
+            # Wait until at least one results row actually contains the film title.
+            # wait_for_selector("table tbody tr") returns immediately on stale rows
+            # that are still in the DOM while Angular loads the new search results —
+            # so we poll until the title appears in the table instead.
+            title_lower = title.lower()
             try:
-                page.wait_for_selector("table tbody tr", timeout=10_000)
+                page.wait_for_function(
+                    """(titleLower) => {
+                        const rows = document.querySelectorAll('table tbody tr');
+                        return Array.from(rows).some(
+                            r => r.textContent.toLowerCase().includes(titleLower)
+                        );
+                    }""",
+                    arg=title_lower,
+                    timeout=15_000,
+                )
             except PlaywrightTimeout:
-                pass
-            page.wait_for_timeout(800)
+                log("  WARNING: Search results did not load a matching row in 15s")
+            page.wait_for_timeout(500)
         else:
             log("  WARNING: Search button not found — table may not refresh")
 
@@ -2209,34 +2278,40 @@ def _search_plans_for_title(page, title: str):
         log(f"  WARNING: Plans filter setup failed ({e}) — will search current table")
 
 
-def _find_and_click_plan(page, title: str, mode: str = "demo") -> bool:
+def _find_and_click_plan(page, title: str, mode: str = "demo", plan_desc: str = "") -> bool:
     """Find the best matching plan row for a title.
     - Searches ALL cells in each row (not just first).
+    - If plan_desc is given, strongly prefer rows whose description contains it.
     - Production: prefer plans with 'US, CA, PR' description.
     - Demo: prefer plans with 'Demo' description.
     - If only one plan exists, use it regardless of description.
     """
     title_lower = title.lower().strip()
+    plan_desc_lower = plan_desc.lower().strip()
     result: dict = page.evaluate(
         """
-        ([titleLower, isDemo]) => {
+        ([titleLower, isDemo, planDescLower]) => {
             const rows = Array.from(document.querySelectorAll('table tbody tr'));
             const sample = rows.slice(0, 5).map(r =>
                 r.textContent.trim().replace(/\\s+/g, ' ').substring(0, 80)
             );
 
             // Score each matching row — higher = better
+            // planDescLower: +100 if description contains the specified plan description
             // Demo mode:  +15 description contains "demo"
             // Prod mode:  +10 description contains "us" AND "can/ca", +5 "us, ca", +2 "pr"
             // -20  description is "Mystery Movie" (hidden/blind title — never the right plan)
             // -10  description contains "test"
-            const PREFER = isDemo ? [
-                d => d.includes('demo')                           ? 15 : 0,
-            ] : [
-                // US/CAN ONLY, US/CAN/PR, US, CA, PR — all territory indicators
-                d => (d.includes('us') && (d.includes('can') || d.includes('ca'))) ? 10 : 0,
-                d => d.includes('pr')                             ?   2 : 0,
-                d => d.includes('us, ca') || d.includes('us,ca') ?   5 : 0,
+            const PREFER = [
+                ...(planDescLower ? [d => d.includes(planDescLower) ? 100 : 0] : []),
+                ...(isDemo ? [
+                    d => d.includes('demo')                           ? 15 : 0,
+                ] : [
+                    // US/CAN ONLY, US/CAN/PR, US, CA, PR — all territory indicators
+                    d => (d.includes('us') && (d.includes('can') || d.includes('ca'))) ? 10 : 0,
+                    d => d.includes('pr')                             ?   2 : 0,
+                    d => d.includes('us, ca') || d.includes('us,ca') ?   5 : 0,
+                ]),
             ];
             const AVOID = [
                 d => d.includes('mystery movie')              ? -20 : 0,
@@ -2271,7 +2346,7 @@ def _find_and_click_plan(page, title: str, mode: str = "demo") -> bool:
             return { idx: chosen, sample, chosenDesc };
         }
         """,
-        [title_lower, mode == "demo"],
+        [title_lower, mode == "demo", plan_desc_lower],
     )
     log(f"  Plans table sample rows: {result.get('sample', [])}")
     log(f"  Selected plan row: {result.get('chosenDesc', '(none)')}")
@@ -2516,376 +2591,45 @@ def _count_table_rows(page) -> int:
 # City+state → actual venue name aliases for exhibitors that send booking sheets
 # with only "City, ST  HOLD/Final" (no theatre name).  Key = normalized city+state.
 # Espanola is the critical one — "dreamcatcher" has no city word so word-scoring fails.
-_CITY_VENUE_ALIASES: dict[str, str] = {
-    "espanola, nm":      "dreamcatcher 10",
-    "espanola nm":       "dreamcatcher 10",
-    "espanola":          "dreamcatcher 10",
-    "independence, mo":  "pharaoh independence 4",
-    "independence mo":   "pharaoh independence 4",
-    "guymon, ok":        "northridge guymon 8",
-    "guymon ok":         "northridge guymon 8",
-    "florence, sc":      "julia florence 4",
-    "florence sc":       "julia florence 4",
-    "tulsa, ok":         "eton tulsa 6",
-    "tulsa ok":          "eton tulsa 6",
-    "kirksville, mo":    "downtown kirksville 8",
-    "kirksville mo":     "downtown kirksville 8",
-    "marion, nc":        "hometown cinemas marion 2",
-    "marion nc":         "hometown cinemas marion 2",
-    "fulton, mo":        "fulton cinema 8",
-    "fulton mo":         "fulton cinema 8",
-    "lumberton, nc":     "hometown lumberton 4",
-    "lumberton nc":      "hometown lumberton 4",
-    "marshall, mo":      "cinema marshall 3",
-    "marshall mo":       "cinema marshall 3",
-    "milford, ia":       "pioneer milford 1",
-    "milford ia":        "pioneer milford 1",
-    "parsons, ks":       "the parsons theatre",
-    "parsons ks":        "the parsons theatre",
-    "lamar, mo":         "plaza lamar 1",
-    "lamar mo":          "plaza lamar 1",
-    "borger, tx":        "morley borger 5",
-    "borger tx":         "morley borger 5",
-    "mountain grove, mo": "fun city 5 cinemas",
-    "mountain grove mo":  "fun city 5 cinemas",
-    "mountain grove":     "fun city 5 cinemas",
-    # AMC booking-name → Mica venue name (name differs from what parser extracts)
-    "mt vernon 8":              "Mount Vernon 8",
-    "mesa grand 14":            "Mesa Grande 14",
-    "southern hill 12":         "Southern Hills 12",
-    "arrowhead town center 14": "Arrowhead 14",
-    "tulsa 12":                 "Tulsa Hills 12",
-    "southroads 20":            "Southroads Tulsa 20",
-    "foothills 15":             "Foothills Tucson 15",
-    "surprise 14":              "Surprise Pointe 14",
-    # Regal/Becky Williams — "Stm" suffix stripped by STOP, but these need city disambiguation
-    "champlain centre stm 8":        "Champlain Plattsburgh 8",
-    "e. greenbush 8":                "East Greenbush 8",
-    "aviation mall 9":               "Aviation Mall Queensbury 9",
-    # Regal/Rich Motzer — abbreviated venue names
-    "natomas mktplace stm 16 & rpx": "Natomas Marketplace 16",
-    "stockton cty ctr stm 16 & imax":"Stockton City Center 16",
-    # Regal/Christopher Lauderdale — stm-only sig-word venues need city disambiguation
-    "auburn stm 17":                "Auburn Stadium 17",
-    "bridgeport stm 18 & imax":     "Bridgeport Tigard 18",
-    "cascade stm 16 imax & rpx":    "Cascade Vancouver 16",
-    "cinema 99 stm 11":             "Cinema 99 Vancouver",
-    "city center stm 12":           "City Vancouver 12",
-    "movies on tv stm 16":          "Movies Hillsboro 16",
-    "santiam stm 11":               "Santiam Salem 11",
-    "stark street stm 10":          "Stark Gresham 10",
-    # Celebration! Cinema (Zach Righetti) — booking names differ from Mica abbreviated names
-    "cinema carousel 16":               "Celebration Cinema Carousel",
-    "crossroads 15 + imax":             "Celebration Crossroads Imax",
-    "rivertown 13 + c premium":         "Celebration Cinema Rivertown",
-    "grand rapids north 17 + imax":     "Celebration Cinema GR North",
-    "grand rapids south 15 + c premium":"Celebration South",
-    "lansing 19 + c premium xl":        "Celebration Lansing Imax",
-    "mt. pleasant 11":                  "Celebration Mt Pleasant",
-    "benton harbor 14 + dbox":          "Celebration Benton Harbor",
-    # Hooky Entertainment / Tammy Flores — Hutto has no city in venue name; RedStone spelling
-    "hooky entertainment + sdx + imax, hutto": "Hooky Entertainment + SDX + IMAX Hutto 8",
-    "hooky entertainment + sdx + imax":        "Hooky Entertainment + SDX + IMAX Hutto 8",
-    "redstone 14 cinemas w/pdx":               "Red Stone 14 Cinemas",
-    "redstone 14 cinemas":                     "Red Stone 14 Cinemas",
-    # Kaitlin Privitera (AMC KC/Midwest) — report short names differ from Mica names
-    "studio 28":               "AMC Studio Olathe 30",
-    "independence 20":         "AMC Independence Commons 20",
-    "prairiefire 17":          "AMC DINE-IN Prairie Fire 17",
-    "legends 14":              "AMC Legends Kansas City 14",
-    "northrock 14":            "AMC Northrock Wichita 14",
-    "springfield 11":          "AMC Springfield 11",
-    # James Douglas (AMC SE/Florida) — report short names differ from Mica names
-    "regency 24":            "AMC Regency Sq Jacksonville 24 & IMAX",
-    "aventura mall 24":      "AMC Aventura 24 & IMAX",
-    "sunset place 24":       "AMC Sunset S Miami 24 & IMAX",
-    "weston 8":              "AMC Weston Cinema Sunrise 8",
-    "bayou 15":              "AMC Bayou Pensacola 15 & IMAX",
-    "avenue 16":             "AMC Avenue Melbourne 16",
-    "tallahassee 20":        "AMC Tallahassee Mall 20 & IMAX",
-    "veterans expressway 24":"AMC Veterans Tampa 24 & IMAX",
-    "regency 20":            "AMC Regency Sq Brandon 20 & IMAX",
-    "woodlands square 20":   "AMC Woodland Sq Oldsmar 20 & IMAX",
-    "riverview 14":          "AMC Riverview Gibsonton 14",
-    "westshore plaza 14":    "AMC Westshore Tampa 14",
-    "sundial 12":            "AMC Sundial St Petersburg",
-    "coral ridge 10":        "AMC Coral Ridge Ft Lauderdale 10",
-    "pensacola 18":          "AMC CLASSIC Pensacola 18",
-    # Sergio Candelas (AMC Central/Southwest) — report short names differ from Mica names
-    "quail springs mall 24": "AMC Quail Springs Oklahoma City 24 & IMAX",
-    "town square 18":        "AMC Town Square Las Vegas 18 & IMAX",
-    "decatur 10":            "AMC CLASSIC Decatur 10",
-    "springfield 12":        "AMC CLASSIC Springfield 12 with IMAX",
-    "springfield 8":         "AMC Springfield 8",
-    "esplanade 14":          "AMC DINE-IN Esplanade 14",
-    # Ron Wooley (AMC NE) — report short names differ from Mica names
-    "plainville 20":   "AMC Plainville Cinema 20",
-    "palisades 21":    "AMC Palisades Center 21",
-    "freehold 14":     "AMC Freehold Metroplex 14",
-    "aviation 12":     "AMC Aviation Linden 12",
-    "levittown 10":    "AMC DINE-IN Levittown 10",
-    "landmark 8":      "AMC Landmark 8",
-    # Dave Glass (AMC) — report short names differ from Mica names
-    "southlands 16":        "AMC Southlands Aurora 16",
-    "flatiron crossing 14": "AMC Flatiron Broomfield 14",
-    "orchard 12":           "AMC Orchard Town Center Westminster 12",
-    "mayfair 18":           "AMC Mayfair Mall Wauwatosa 18",
-    "southdale center 16":  "AMC Southdale Edina 16",
-    "southgate 9":          "AMC DINE-IN Southgate 9",
-    "southcenter 16":       "AMC Southcenter Tukwila 16 & IMAX",
-    "factoria 8":           "AMC Factoria Bellevue 8",
-    "alderwood 16":         "AMC Alderwood Lynnwood 16",
-    # Kathryn Wintermyer (AMC Detroit/OH/PA) — report short names differ from Mica names
-    "forum 30":             "AMC Forum Sterling Heights 17",
-    "gratiot 15":           "AMC Star Gratiot Clinton Township 15",
-    "john r 15":            "AMC John R Theatre 15",
-    "stonybrook 20":        "AMC Stonybrook Louisville 20",
-    "309 cinema 9":         "AMC 309 Cinemas North Wales 9",
-    "berkshire 8":          "AMC Berkshire Wyomissing 8",
-    "marlton 8":            "AMC Marlton Cinemas 8",
-    "westmoreland 15":      "AMC Westmoreland Greensburg 15",
-    # ── Tom McCauley (AMC New England / Mid-Atlantic) ─────────────────────────
-    "methuen 20":           "AMC Methuen at the Loop 20",
-    "hampton 24":           "AMC Hampton Towne Centre 24",
-    "loudoun 11":           "AMC Loudoun Station Ashburn 11",
-    "worldgate 9":          "AMC Worldgate Herndon 9",
-    "columbia mall 14":     "AMC Columbia Maryland 14",
-    "mj capital center 12": "AMC Magic Johnson Capital Center 12",
-    "st charles towne center 9": "AMC St. Charles Waldorf 9",
-    "academy 8":            "AMC Academy Greenbelt 8",
-    # ── Justin Johnson (AMC Chicago / Midwest / Indiana / Rockford) ───────────
-    "yorktown 18":          "AMC Yorktown Lombard 18",
-    "galewood 14":          "AMC Galewood Crossings 14",
-    "hawthorn 12":          "AMC Hawthorn Vernon Hills 12",
-    "randhurst 12":         "AMC Randhurst Mount Prospect 12",
-    "peru 8":               "AMC Peru Mall 8",
-    "castleton square 14":  "AMC Castleton Indianapolis 14",
-    "washington sq 12":     "AMC Washington Square 12",
-    # ── Dan Cammarata (AMC Texas / SE — DFW / Houston / SA / Austin / Savannah) ─
-    "northpark 15":              "AMC North Park Dallas 15 & IMAX",
-    "lakeline 9":                "AMC Lakeline Mall Cedar Park 9",
-    "fountains 18":              "AMC Fountains Stafford 18 & IMAX",
-    "rivercenter 11":            "AMC Rivercenter San Antonio 9",
-    "sikes 10":                  "AMC Sikes Senter 10",
-    "corpus 16":                 "AMC Corpus Christi 16",
-    "stonebriar mall 24":        "AMC Stonebriar Frisco 24 & IMAX",
-    "firewheel town center 18":  "AMC Firewheel Garland 18",
-    "eastchase 9":               "AMC Eastchase Ft Worth 9",
-    "willowbrook 24":            "AMC Willowbrook Houston 24",
-    "brazos 14":                 "AMC Brazos Stadium Lake Jackson 14",
-    # ── Devan Tolbert (AMC SE / Louisiana / Carolinas) ───────────────────────
-    "hanes 12":                  "AMC Hanes Winston Salem 12",
-    # ── Brandon Ferguson (AMC LA / San Diego / Sacramento / SF Bay Area) ────────
-    "orange 30":                 "AMC Block Orange 30 & IMAX",
-    "tyler 16":                  "AMC Tyler Riverside 16 & IMAX",
-    "mercado 20":                "AMC Mercado Santa Clara 20 & IMAX",
-    "metreon 16":                "AMC Metreon San Francisco 16 & IMAX",
-    "eastridge 15":              "AMC Eastridge Mall San Jose 15 & IMAX",
-    "saratoga 14":               "AMC Saratoga San Jose 14 & IMAX",
-    # ── Kelsey Kash (AMC AL / TN / Chattanooga / Knoxville / Tri-Cities) ────────
-    "dothan pavilion 12":        "AMC CLASSIC Dothan Pavillion 12",
-    "vestavia 10":               "AMC DINE-IN Vestavia Hills 10",
-    "battlefield 10":            "AMC CLASSIC Battlefield Ft Oglethorpe 10",
-    "thoroughbred 20":           "AMC Thoroughbred Franklin 20 & IMAX",
-    "stones river 9":            "AMC Stone River 9",
-    # ── David Saunders (Pacific NW / OR / WA indie circuit) ──────────────────
-    "bremerton":                 "SEEfilm Cinema",
-    "cinestars":                 "Hood River Cinemas 5",
-    "coast":                     "Coast Fort Bragg 4",
-    "milwaukie":                 "Milwaukie Portland 2",
-    "living room pdx":           "Living Room Theatres Portland",
-    "living room indy":          "Living Room Theaters Indianapolis",
-    "battle ground":             "Battle Ground Cinema 8",
-    "canby":                     "Canby Cinema 8",
-    "independence":              "Independence Cinema 8",
-    "oak grove":                 "Oak Grove Portland 8",
-    "roseburg":                  "Roseburg Cinema",
-    "sandy":                     "Sandy Cinema 8",
-    "scappoose":                 "Scappoose Cinema 7",
-    # ── Blue Smiley / CFB Epic + GTC (Rentrak-grid fallback for fuzzy failures) ─
-    "regency square 8":              "Epic Regency Cinema Stuart 8",
-    # ── Glen Parham GTC — defensive fallbacks (city+state lookup handles these;
-    #    aliases fire only if raw booking name reaches JS fuzzy matcher) ─────────
-    "riverwatch":                    "GTC Riverwatch Cinemas 12",
-    "gateway 7":                     "GTC Gateway 7",
-    "island 7":                      "GTC Island 7",
-    "smithfield cinemas 10":         "GTC Smithfield 10",
-    "valdosta stadium 15 w/gtx":     "GTC Valdosta 15",
-    "pooler stadium 14 w/gtx":       "GTC Pooler 14",
-    "mall 7":                        "GTC Mall Cinemas 7",
-    "evans 14":                      "GTC Evans 14",
-    "liberty 9":                     "GTC Liberty 9",
-    "mountain cinemas 8":            "GTC Mountain Cinemas 8",
-    "university 16 cinemas w/gtx":   "GTC University 16",
-    "moultrie stadium 6 cinemas":    "GTC Moultrie 6",
-    "danville stadium 12":           "GTC Danville 12",
-    # ── Cinemark DFW (Eric Bond) — historical/local names → Mica master names ──
-    "cinemark central plano 10":          "cinemark movies plano 10",
-    "cut! by cinemark":                   "cinemark cut! 10",
-    "cinemark 17":                        "cinemark 17 + imax",
-    "rave ridgmar 13":                    "cinemark ridgmar mall 13 + xd",
-    "rave north east mall 18":            "cinemark northeast mall 18 + xd",
-    "cinemark cleburne":                  "cinemark cinema cleburne 6",
-    "cinemark 12 and xd":                 "cinemark mansfield 12 + xd",
-    "tinseltown grapevine and xd":        "cinemark tinseltown grapevine 17 + xd",
-    "cinemark 17 + imax":                 "cinemark tulsa 17",
-    "cinemark 14, cedar hill":            "cinemark cedar hill 14",
-    "movies 14, lancaster":               "cinemark movies lancaster 14",
-    "cinemark 14, denton":                "cinemark denton 14",
-    "cinemark 12, sherman":               "cinemark sherman 12",
-    "movies 8, paris":                    "cinemark movies paris 8",
-    "cinemark west plano, plano":         "cinemark movies plano 10",
-    "cinemark west plano":                "cinemark movies plano 10",
-    "cinemark (the legacy), plano":       "cinemark legacy 24 + xd",
-    "cinemark (the legacy)":              "cinemark legacy 24 + xd",
-    "cinemark allen 16 and xd, allen":    "cinemark allen 16 + xd",
-    "cinemark allen 16 and xd":           "cinemark allen 16 + xd",
-    "cinemark roanoke 14, roanoke":       "cinemark roanoke 14 + xd",
-    "cinemark roanoke 14":                "cinemark roanoke 14 + xd",
-    "cinemark rockwall 14 and xd, rockwall": "cinemark rockwall 14 + xd",
-    "cinemark rockwall 14 and xd":        "cinemark rockwall 14 + xd",
-    # ── Cinemark national shorthand → Mica full name ─────────────────────────
-    "tinseltown usa, jacksonville":       "cinemark tinseltown jacksonville 20 + xd",
-    "tinseltown usa, fayetteville":       "cinemark tinseltown fayetteville 17 + xd",
-    "tinseltown usa, north aurora":       "cinemark tinseltown north aurora 17 usa",
-    "cinemark orlando and xd":            "cinemark festival bay orlando 20 + xd",
-    "cinemark orlando and xd, orlando":   "cinemark festival bay orlando 20 + xd",
-    "cinemark west dundee, il":           "cinemark spring hill mall 8 + xd",
-    "cinemark west dundee":               "cinemark spring hill mall 8 + xd",
-    "movies 8 ladson oakbrook ii":        "cinemark movies summerville 8",
-    "movies 8 ladson oakbrook ii, summerville": "cinemark movies summerville 8",
-    "movies 10, bourbonnais":             "cinemark movies bourbonnais 10",
-    "movies 10":                          "cinemark movies bourbonnais 10",
-    "cinemark louis joliet mall":         "cinemark louis joliet mall 14",
-    "deer park 16":                       "cinemark century deer park 16",
-    "deer park 16, deer park":            "cinemark century deer park 16",
-    "valparaiso commons shopping center": "cinemark at valparaiso 12",
-    "cinemark palace 20, boca raton":     "cinemark palace 20 + xd",
-    "cinemark palace 20":                 "cinemark palace 20 + xd",
-    "cinemark paradise 24, davie":        "cinemark paradise 24 + xd",
-    "cinemark paradise 24":               "cinemark paradise 24 + xd",
-    "cinemark bluffton, bluffton":        "cinemark bluffton 12",
-    "cinemark bluffton":                  "cinemark bluffton 12",
-    "cinemark seven bridges":             "cinemark 7 bridges woodridge 16 imax",
-    "cinemark seven bridges, woodridge":  "cinemark 7 bridges woodridge 16 imax",
-    # ── Cinemark general overrides ────────────────────────────────────────────
-    "cinemark 22 + imax":                 "cinemark lancaster 22",
-    "cinemark 22 + imax, lancaster":      "cinemark lancaster 22",
-    "cinemark 16 +xd, victorville":       "cinemark victorville 16 + xd",
-    # ── Cinemark Taylor Reynolds (SW/UT/AZ/NV) ────────────────────────────────
-    "cinemark 16, mesa":                  "cinemark mesa 16",
-    "cinemark 16, provo":                 "cinemark provo 16",
-    "cinemark 24 + xd, west jordan":      "cinemark west jordan 24+xd",
-    "imperial valley 14, el centro":      "cinemark century imperial valley mall 14",
-    "imperial valley 14":                 "cinemark century imperial valley mall 14",
-    "sierra vista 10, sierra vista":      "cinemark sierra vista 10",
-    "sierra vista 10":                    "cinemark sierra vista 10",
-    "cinemark spanish fork + xd, spanish fork": "cinemark spanish fork 8+xd",
-    "cinemark spanish fork + xd":         "cinemark spanish fork 8+xd",
-    "henderson 12, henderson":            "cinemark cinedome 12 (henderson)",
-    "henderson 12":                       "cinemark cinedome 12 (henderson)",
-    "cinemark draper + xd, draper":       "cinemark draper 12 + xd",
-    "cinemark draper + xd":               "cinemark draper 12 + xd",
-    "cinemark farmington + xd, farmington": "cinemark farmington 14+ xd",
-    "cinemark farmington + xd":           "cinemark farmington 14+ xd",
-    "cinemark riverton + xd, riverton":   "cinemark riverton ridgewood 14 +xd",
-    "cinemark riverton + xd":             "cinemark riverton ridgewood 14 +xd",
-    "century el con + xd, tucson":        "cinemark century 20 el con and xd (tucson)",
-    "century el con + xd":                "cinemark century 20 el con and xd (tucson)",
-    "cinemark 12, american fork":         "cinemark american fork 12",
-    # ── Cinemark Pacific NW (Josh Wymer) ─────────────────────────────────────
-    "lincoln square cinema with imax":    "cinemark lincoln square cinemas imax 16",
-    "lincoln square cinema bistro 6":     "cinemark reserve lincoln square dine-in 6",
-    "cinemark totem lake + xd":           "cinemark village at totem lake 8",
-    "century walla walla grand cinema 12":"cinemark walla walla grand cinema12",
-    "century arden and xd, sacramento":   "cinemark century arden + xd 14",
-    "century arden and xd":               "cinemark century arden + xd 14",
-    "century marina + xd, marina":        "cinemark century marina + xd 5",
-    "century marina + xd":                "cinemark century marina + xd 5",
-    "cinemark 17, springfield":           "cinemark springfield 17",
-    # ── Diane Johnson (CSC) — Waikoloa name has no Mica city word ─────────────
-    "waikoloa 3":                         "waikoloa village cinema 3",
-    # ── Watson / Imagine Cinemas Canada ──────────────────────────────────────
-    # Bare city/location names used by Richard Watson (Imagine + Cinestarz groups)
-    "promenade mall":                     "imagine cinemas promenade 6",
-    "london":                             "imagine cinemas london",
-    "lakeshore windsor":                  "imagine cinemas lakeshore",
-    "alliston":                           "imagine cinemas alliston",
-    # ── Watson / Cinestarz (CineStarz Quebec/Ontario) ─────────────────────────
-    "cote des nieges":                    "cine starz cote-des-neiges 7",
-    "cote-des-nieges":                    "cine starz cote-des-neiges 7",
-    "deluxe taschereau":                  "cine starz taschereau 12",
-    "deluxe longueuil":                   "cinestarz longueuil 14",
-    "burlington":                         "cine starz burlington",
-    "st. laurent":                        "cine starz st laurent centre",
-    "st laurent":                         "cine starz st laurent centre",
-    # ── Matt Culbertson / IBS (Indiana Booking Service) ──────────────────────
-    # Bare city names used by IBS; venue names in Mica differ substantially
-    "goshen":                             "linway plaza goshen 14",
-    "jerseyville":                        "the stadium theater 3",
-    "litchfield":                         "westside litchfield 3",
-    "rensselaer":                         "fountain stone theaters rensselaer 5",
-    "nappanee theatre":                   "nappanee theatre 1",
-    "goshen, in":                         "linway plaza goshen 14",
-    "jerseyville, il":                    "the stadium theater 3",
-    "litchfield, il":                     "westside litchfield 3",
-    "rensselaer, in":                     "fountain stone theaters rensselaer 5",
-    # ── Jennifer Solorzano (Cinemark CO / NM / TX West circuit) ─────────────
-    "cinemark 12, greeley":               "cinemark greeley 12",
-    "cinemark 16, fort collins":          "cinemark fort collins 16",
-    "main place 6, mcallen":              "cinemark movies 6",
-    "main place 6":                       "cinemark movies 6",
-    "cinemark 16 + xd, brownsville":      "cinemark brownsville 16 + xd",
-    "cinemark 16 + xd, harlingen":        "cinemark harlingen 16 + xd",
-    "cinemark abilene and xd, abilene":   "cinemark abilene 12",
-    "cinemark abilene and xd":            "cinemark abilene 12",
-    # ── Andy Anderson (Cinemark SF Bay Area) ─────────────────────────────────
-    "century at hayward, hayward":        "cinemark century at hayward 12",
-    "century at hayward":                 "cinemark century at hayward 12",
-    # ── Beth Teal (Cinemark East / Midwest) ──────────────────────────────────
-    "cinemark towson + xd, towson":           "cinemark towson 15 + xd",
-    "cinemark towson + xd":                   "cinemark towson 15 + xd",
-    "cinemark 15 + xd, hadley":               "cinemark hadley 15 + xd",
-    "cinemark tinseltown + xd, louisville":   "cinemark tinseltown louisville + xd",
-    "cinemark paducah, paducah":              "cinemark paducah 12",
-    "cinemark paducah":                       "cinemark paducah 12",
-    # ── Jennifer Hernandez (Cinemark SoCal — LA / Palm Springs) ─────────────
-    "cinemark 12 and xd, los angeles":        "cinemark 12 howard hughes la and xd",
-    "cinemark 16, palmdale":                  "cinemark antelope valley mall palmdale 16",
-    "century la quinta + xd, la quinta":      "cinemark century la quinta 12 + xd",
-    # ── Allie Fullmer (Cinemark TX — Houston / Austin / SA / Corpus) ─────────
-    "tinseltown 17 + xd, the woodlands":     "cinemark the woodlands 17 + xd",
-    "cinemark 18 + xd, webster":             "cinemark webster 18 + xd",
-    "hollywood usa 20, pasadena":            "cinemark hollywood pasadena 20",
-    "cinemark 19 + xd, katy":                "cinemark katy 19 + xd",
-    "cinemark 12 + xd, pearland":            "cinemark pearland 12 + xd",
-    "cinemark 12 + xd, cypress":             "cinemark cypress 12 + xd",
-    "cut! by cinemark cypress, cypress":     "cinemark cut 8!",
-    "cut! by cinemark cypress":              "cinemark cut 8!",
-    "cinemark 12, rosenberg":                "cinemark rosenberg 12",
-    "cinemark 12, victoria":                 "cinemark victoria 12",
-    "century 16 + imax, corpus christi":     "cinemark century corpus christi 16 + xd and imax",
-    "college station + xd, college station": "cinemark college station 18 + xd",
-    "stone hill town center, pflugerville":  "cinemark stone hill town ctr pflugerville 9",
-    "stone hill town center":               "cinemark stone hill town ctr pflugerville 9",
-    "cinemark 14, round rock":               "cinemark round rock 14",
-    "southpark meadows 14, austin":          "cinemark southpark mall austin 14",
-    "southpark meadows 14":                  "cinemark southpark mall austin 14",
-    "movies 8, del rio":                     "cinemark movies del rio 8",
-    "cinemark 7, eagle pass":                "cinemark eagle pass 7",
-}
+from venue_aliases import CITY_VENUE_ALIASES as _CITY_VENUE_ALIASES
 
 
-def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = False) -> dict:
+def _apply_city_alias_bpa(name: str, city: str = "") -> str:
+    """City-qualified alias lookup (mirrors mica_update._apply_city_alias).
+    Tries "name, city" first (disambiguates e.g. "Tinseltown 17 + XD" in Jacinto City
+    vs The Woodlands vs Pflugerville), then "name, <city w/o state>", then name-only.
+    Falls back to the plain name when city is empty, so it is a strict superset of the
+    old name-only lookup."""
+    name_l = ' '.join(name.lower().split())
+    if city:
+        city_l = ' '.join(city.lower().split())
+        combined = f"{name_l}, {city_l}"
+        if combined in _CITY_VENUE_ALIASES:
+            return _CITY_VENUE_ALIASES[combined]
+        city_only = city_l.split(",")[0].strip()
+        if city_only and city_only != city_l:
+            combined2 = f"{name_l}, {city_only}"
+            if combined2 in _CITY_VENUE_ALIASES:
+                return _CITY_VENUE_ALIASES[combined2]
+    return _CITY_VENUE_ALIASES.get(name_l, name)
+
+
+def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = False,
+                            cities: list[str] | None = None) -> dict:
     """
     Check the checkbox for each venue row that best matches a booking-sheet
     theatre name using significant-word scoring.
     If dry_run=True, computes matches but does NOT click any checkboxes.
     Returns dict: { selected: int, missed: list[str], unselected: list[str] }
     """
-    # Pre-translate known city+state aliases → actual venue names so the JS
-    # word-scorer can find them (e.g. "Espanola, NM" → "Dreamcatcher 10").
-    translated = [_CITY_VENUE_ALIASES.get(n.lower().strip(), n) for n in theatre_names]
+    # Pre-translate known aliases → actual venue names so the JS word-scorer can find
+    # them. City-qualified when a parallel cities list is supplied (e.g. "Tinseltown
+    # 17 + XD" + "Jacinto City" → "Cinemark Tinseltown Jacinto City 17 + XD"); else
+    # name-only (e.g. "Espanola, NM" → "Dreamcatcher 10").
+    if cities and len(cities) == len(theatre_names):
+        translated = [_apply_city_alias_bpa(n, c) for n, c in zip(theatre_names, cities)]
+    else:
+        translated = [_CITY_VENUE_ALIASES.get(n.lower().strip(), n) for n in theatre_names]
     result = page.evaluate(
         """
         ([bookingNames, dryRun]) => {
@@ -2942,6 +2686,9 @@ def _select_matching_venues(page, theatre_names: list[str], dry_run: bool = Fals
             const headers = Array.from(document.querySelectorAll('table thead th'))
                                   .map(h => h.textContent.trim().toLowerCase());
             const venueColIdx = headers.findIndex(h => h.startsWith('venue'));
+            // Angular removes non-matching rows from the DOM when a buyer filter is
+            // applied, so a plain querySelectorAll is sufficient — no visibility
+            // filter needed (and offsetParent is unreliable on position:fixed tables).
             const rows = Array.from(document.querySelectorAll('table tbody tr'));
             const venueTexts = rows.map(row => {
                 const cells = Array.from(row.querySelectorAll('td'));
@@ -3262,127 +3009,329 @@ def _set_agreed(page, expected: int):
         log("  WARNING: Confirmation dialog did not appear")
 
 
-def _update_venue_playweek(page, theatre_name: str, new_date: str):
-    """
-    For the venue row matching theatre_name, click its Start Date cell to open
-    the Edit Playweeks modal, update the Start Date to new_date (MM/DD/YYYY),
-    let End Date auto-populate, then click Save.
-    """
-    # Find the "Start Date" column index
-    col_idx: int = page.evaluate("""
-    () => {
-        const headers = Array.from(document.querySelectorAll('table thead th'));
-        const idx = headers.findIndex(h =>
-            h.textContent.trim().toLowerCase().includes('start date')
-        );
-        return idx;
-    }
-    """)
-
-    if col_idx < 0:
-        log(f"  WARNING: 'Start Date' column not found — cannot update playweek")
-        return
-
-    # Find the row that best matches the theatre name
-    row_idx: int = page.evaluate(
-        """
-        (theatreName) => {
-            function sigWords(s) {
-                return s.toLowerCase().split(/[^a-z0-9]+/)
-                        .filter(w => w.length >= 2 && !/^\\d+$/.test(w));
-            }
-            function scoreInfo(venueText, bw) {
-                const rw = sigWords(venueText);
-                const m = bw.filter(w => rw.some(r =>
-                    r === w || r.startsWith(w) || w.startsWith(r)
-                )).length;
-                return { m, ratio: rw.length > 0 ? m / rw.length : 0 };
-            }
-            // Find the Venue column by header text
-            const headers = Array.from(document.querySelectorAll('table thead th'))
-                                  .map(h => h.textContent.trim().toLowerCase());
-            const venueColIdx = headers.findIndex(h => h.startsWith('venue'));
-            const rows = Array.from(document.querySelectorAll('table tbody tr'));
-            const bw = sigWords(theatreName);
-            let bestM = 0, bestRatio = 0, bestIdx = -1;
-            rows.forEach((row, i) => {
-                const cells = Array.from(row.querySelectorAll('td'));
-                const vCell = venueColIdx >= 0 ? cells[venueColIdx] : (cells[2] || cells[1]);
-                const text = (vCell ? vCell.textContent : row.textContent).trim();
-                const { m, ratio } = scoreInfo(text, bw);
-                if (m > bestM || (m === bestM && m > 0 && ratio > bestRatio)) {
-                    bestM = m; bestRatio = ratio; bestIdx = i;
-                }
-            });
-            return bestM >= 1 ? bestIdx : -1;
-        }
-        """,
-        theatre_name,
-    )
-
-    if row_idx < 0:
-        log(f"  WARNING: Row not found for playweek update: {theatre_name}")
-        return
-
-    # Click the Start Date cell via JS to bypass sticky nav/pagination overlays
+def _uncheck_row(page, row_idx: int):
+    """Uncheck the checkbox on visible row row_idx (no-op if already unchecked)."""
     page.evaluate(
         """
-        ([rowIdx, colIdx]) => {
-            const rows = document.querySelectorAll('table tbody tr');
-            const row  = rows[rowIdx];
+        (rowIdx) => {
+            // Angular removes non-matching rows from the DOM, so plain
+            // querySelectorAll is sufficient (offsetParent is unreliable
+            // on tables with a position:fixed ancestor).
+            const rows = Array.from(document.querySelectorAll('table tbody tr'));
+            const row = rows[rowIdx];
             if (!row) return;
-            const cells = row.querySelectorAll('td');
-            const cell  = cells[colIdx];
-            if (!cell) return;
-            const target = cell.querySelector('a') || cell;
-            target.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+            const cb = row.querySelector('input[type="checkbox"]');
+            if (cb && cb.checked)
+                cb.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
         }
         """,
-        [row_idx, col_idx],
+        row_idx,
     )
+    page.wait_for_timeout(300)
 
-    # Wait for Edit Playweeks modal
+
+def _gap_weekdays(start_full: str, end_full: str, explicit_full: list) -> list:
+    """
+    Return Mica day-button labels (Mo, Tu, We…) for dates that fall inside
+    [start_full, end_full] but are NOT in explicit_full.
+    Used to deselect Monday when booking says "5/25 and 5/27" (Su + Tu only).
+    start_full / end_full / explicit_full are all MM/DD/YYYY strings.
+    """
+    if not explicit_full or not start_full or not end_full or start_full == end_full:
+        return []
+    from datetime import date as _date, timedelta as _td
+    _ABBR = {0: "Mo", 1: "Tu", 2: "We", 3: "Th", 4: "Fr", 5: "Sa", 6: "Su"}
+    def _p(s):
+        m, d, y = int(s[:2]), int(s[3:5]), int(s[6:])
+        return _date(y, m, d)
+    explicit_set = set(explicit_full)
+    gaps, cur, end_d = [], _p(start_full), _p(end_full)
+    while cur <= end_d:
+        key = f"{cur.month:02d}/{cur.day:02d}/{cur.year}"
+        if key not in explicit_set:
+            gaps.append(_ABBR[cur.weekday()])
+        cur += _td(days=1)
+    return gaps
+
+
+def _playdays_by_week(start_full: str, end_full: str, skip_weekdays=None) -> dict:
+    """
+    Returns {week_start_MM/DD/YYYY: [day_abbrs]} for every Mica week
+    (Friday-start) that overlaps [start_full, end_full], minus skip_weekdays.
+    Used to explicitly set which day buttons are active after typing dates,
+    because Mica does NOT auto-recalculate Playdays when dates are typed
+    programmatically (it keeps the old saved state).
+    start_full / end_full are MM/DD/YYYY strings.
+    """
+    if not start_full:
+        return {}
+    _ABBR = {0: "Mo", 1: "Tu", 2: "We", 3: "Th", 4: "Fr", 5: "Sa", 6: "Su"}
+    skip_set = set(skip_weekdays or [])
+    def _p(s):
+        m, d, y = int(s[:2]), int(s[3:5]), int(s[6:])
+        return _dt_date(y, m, d)
+    def _wk_start(dt):
+        """Return the Friday that begins the Mica week containing dt."""
+        return dt - _dt_timedelta(days=(dt.weekday() - 4) % 7)
+    result: dict = {}
+    cur = _p(start_full)
+    end_d = _p(end_full or start_full)
+    while cur <= end_d:
+        wk = _wk_start(cur)
+        wk_key = f"{wk.month:02d}/{wk.day:02d}/{wk.year}"
+        abbr = _ABBR[cur.weekday()]
+        if abbr not in skip_set:
+            result.setdefault(wk_key, []).append(abbr)
+        cur += _dt_timedelta(days=1)
+    return result
+
+
+_FIND_VENUE_ROW_JS = """
+(theatreName) => {
+    function sigWords(s) {
+        return s.toLowerCase().split(/[^a-z0-9]+/)
+                .filter(w => w.length >= 2 && !/^\\d+$/.test(w));
+    }
+    function scoreInfo(venueText, bw) {
+        const rw = sigWords(venueText);
+        const m = bw.filter(w => rw.some(r =>
+            r === w || r.startsWith(w) || w.startsWith(r)
+        )).length;
+        return { m, ratio: rw.length > 0 ? m / rw.length : 0 };
+    }
+    const headers = Array.from(document.querySelectorAll('table thead th'))
+                          .map(h => h.textContent.trim().toLowerCase());
+    const venueColIdx = headers.findIndex(h => h.startsWith('venue'));
+    const rows = Array.from(document.querySelectorAll('table tbody tr'));
+    const bw = sigWords(theatreName);
+    let bestM = 0, bestRatio = 0, bestIdx = -1;
+    rows.forEach((row, i) => {
+        const cells = Array.from(row.querySelectorAll('td'));
+        const vCell = venueColIdx >= 0 ? cells[venueColIdx] : (cells[2] || cells[1]);
+        const text = (vCell ? vCell.textContent : row.textContent).trim();
+        const { m, ratio } = scoreInfo(text, bw);
+        if (m > bestM || (m === bestM && m > 0 && ratio > bestRatio)) {
+            bestM = m; bestRatio = ratio; bestIdx = i;
+        }
+    });
+    return bestM >= 1 ? bestIdx : -1;
+}
+"""
+
+_CHECK_ROW_JS = """
+(rowIdx) => {
+    const rows = Array.from(document.querySelectorAll('table tbody tr'));
+    const row = rows[rowIdx];
+    if (!row) return;
+    const cb = row.querySelector('input[type="checkbox"]');
+    if (cb && !cb.checked)
+        cb.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+}
+"""
+
+_CLICK_SAVE_JS = """
+() => {
+    const dialog = document.querySelector('[role="dialog"]')
+                || document.querySelector('.modal-content');
+    if (!dialog) return false;
+    const btns = Array.from(dialog.querySelectorAll('button'));
+    const saveBtn = btns.find(b => b.textContent.trim().toLowerCase() === 'save')
+                 || btns.find(b => b.textContent.trim().toLowerCase().includes('save'));
+    if (!saveBtn) return false;
+    saveBtn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+    return true;
+}
+"""
+
+_FOCUS_FIRST_INPUT_JS = """
+() => {
+    const dialog = document.querySelector('[role="dialog"]')
+                || document.querySelector('.modal-content');
+    if (!dialog) return false;
+    const inputs = Array.from(dialog.querySelectorAll('input'));
+    if (!inputs[0]) return false;
+    inputs[0].focus();
+    return true;
+}
+"""
+
+
+def _open_playweeks_modal(page) -> bool:
+    """Click the 'Playweeks (N)' toolbar button and wait for the modal. Returns True on success."""
+    pw_handle = page.evaluate_handle(
+        """
+        () => {
+            const all = Array.from(document.querySelectorAll('button, [role="button"], a'));
+            return all.find(el => el.textContent.trim().toLowerCase().startsWith('playweeks')) || null;
+        }
+        """
+    )
+    if pw_handle.as_element() is None:
+        return False
+    page.evaluate("""el => {
+        el.removeAttribute('disabled');
+        el.classList.remove('disabled');
+        el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+    }""", pw_handle)
+    page.wait_for_timeout(400)
     try:
         page.wait_for_selector(
-            '[role="dialog"]:has-text("Playweek"), .modal:has-text("Playweek"), '
-            '[role="dialog"]:has-text("Play"), .modal:has-text("Play")',
+            '[role="dialog"]:has-text("Playweek"), .modal:has-text("Playweek")',
             timeout=6_000,
         )
+        return True
     except PlaywrightTimeout:
-        log(f"  WARNING: Edit Playweeks modal did not open for: {theatre_name}")
+        return False
+
+
+def _fill_playweek_modal_and_save(page, start_date: str, end_date: str,
+                                   skip_weekdays: list = None) -> bool:
+    """
+    Focus start-date input via Playwright locator (not JS evaluate — JS focus is not
+    tracked by Playwright's keyboard system), type dates via keyboard, deselect any
+    gap days, then save.
+    skip_weekdays: Mica day-button labels (e.g. ["Mo"]) to deselect after filling dates.
+    Returns True on success.
+    """
+    modal = page.locator('[role="dialog"], .modal-content').first
+    inputs = modal.locator('input')
+    if inputs.count() == 0:
+        log("    WARNING: No inputs found in playweek modal")
+        return False
+
+    # Use Playwright locator.focus() — this updates Playwright's internal focus tracking
+    # so that page.keyboard.* calls go to the correct element.
+    # (JS evaluate focus does NOT register with Playwright's keyboard system.)
+    start_input = inputs.nth(0)
+    start_input.focus()
+    page.wait_for_timeout(200)
+    page.keyboard.press("Control+a")
+    page.keyboard.type(start_date)
+    page.keyboard.press("Tab")
+    page.wait_for_timeout(400)
+    if end_date:
+        # Focus the second input explicitly so Playwright tracks it correctly
+        if inputs.count() >= 2:
+            end_input = inputs.nth(1)
+            end_input.focus()
+            page.wait_for_timeout(200)
+        page.keyboard.press("Control+a")
+        page.keyboard.type(end_date)
+        page.keyboard.press("Tab")
+        page.wait_for_timeout(600)  # give Mica time to recalculate the playdays row
+
+    # Explicitly set which day buttons are active in each week row.
+    # Mica does NOT auto-recalculate Playdays when dates are typed — it keeps
+    # whatever was previously saved.  _playdays_by_week computes which days
+    # should be active per Mica week (Friday-start), then JS clicks any button
+    # whose state doesn't match.  This replaces the old skip_weekdays-only approach.
+    playdays = _playdays_by_week(start_date, end_date or start_date, skip_weekdays)
+    if playdays:
+        page.wait_for_timeout(800)  # give Mica time to render/refresh week rows
+        corrections = page.evaluate(
+            """
+            (playdaysByWeek) => {
+                const dialog = document.querySelector('[role="dialog"]')
+                            || document.querySelector('.modal-content');
+                if (!dialog) return [];
+                const ALL_DAYS = new Set(['Fr','Sa','Su','Mo','Tu','We','Th']);
+                const corrections = [];
+
+                // Find all table rows that contain day buttons
+                // (partial weeks at end of range may have < 7 buttons, so threshold is 1)
+                const rows = Array.from(dialog.querySelectorAll('tr'));
+                rows.forEach(row => {
+                    const dayBtns = Array.from(
+                        row.querySelectorAll('button, .btn, label, [role="button"]')
+                    ).filter(b => ALL_DAYS.has(b.textContent.trim()));
+                    if (dayBtns.length < 1) return;   // not a playdays row
+
+                    // Extract the week start date (MM/DD/YYYY) from this row
+                    const m = row.textContent.match(/(\\d{2})\\/(\\d{2})\\/(\\d{4})/);
+                    if (!m) return;
+                    const weekKey = m[0];
+                    const expectedSet = new Set(playdaysByWeek[weekKey] || []);
+
+                    dayBtns.forEach(btn => {
+                        const day = btn.textContent.trim();
+                        if (!ALL_DAYS.has(day)) return;
+                        // Detect selected state via common Angular/Bootstrap patterns
+                        const isSelected = btn.classList.contains('active')
+                                        || btn.getAttribute('aria-pressed') === 'true'
+                                        || btn.classList.contains('btn-primary')
+                                        || btn.classList.contains('selected');
+                        const shouldBe = expectedSet.has(day);
+                        if (shouldBe !== isSelected) {
+                            btn.dispatchEvent(
+                                new MouseEvent('click', {bubbles: true, cancelable: true})
+                            );
+                            corrections.push(weekKey + ':' + day + ':' + (shouldBe ? 'on' : 'off'));
+                        }
+                    });
+                });
+                return corrections;
+            }
+            """,
+            playdays,
+        )
+        if corrections:
+            log(f"      Playdays corrected: {', '.join(corrections)}")
+        page.wait_for_timeout(300)
+
+    return bool(page.evaluate(_CLICK_SAVE_JS))
+
+
+def _update_playweeks_for_group(page, mica_names: list, start_date: str, end_date: str = "",
+                                 skip_weekdays: list = None):
+    """
+    Bulk-update playweeks for all venues in mica_names that share the same date.
+    Checks every matching row, opens the Playweeks modal ONCE, fills the date, saves.
+    skip_weekdays: day-button labels (e.g. ["Mo"]) to deselect after filling dates —
+    used for "X and Y" bookings where gap days must be excluded.
+    """
+    date_label = start_date + (f" – {end_date}" if end_date else "")
+    log(f"  Playweek group [{date_label}]: {len(mica_names)} venue(s)")
+
+    checked: list[tuple[int, str]] = []   # (row_idx, name)
+    for name in mica_names:
+        row_idx: int = page.evaluate(_FIND_VENUE_ROW_JS, name)
+        if row_idx < 0:
+            log(f"    WARNING: Row not found — skipping: {name}")
+            continue
+        page.evaluate(_CHECK_ROW_JS, row_idx)
+        page.wait_for_timeout(150)
+        checked.append((row_idx, name))
+        log(f"    checked: {name}")
+
+    if not checked:
+        log("    No rows found — skipping group")
         return
 
-    modal = page.locator(
-        '[role="dialog"]:has-text("Playweek"), .modal-content:has-text("Playweek"), '
-        '[role="dialog"]:has-text("Play"), .modal-content:has-text("Play")'
-    ).first
+    page.wait_for_timeout(400)
 
-    # Fill the Start Date input (first text/date input in the modal)
-    start_input = modal.locator('input[type="text"], input[type="date"]').first
-    if start_input.count() == 0:
-        start_input = modal.locator("input").first
-
-    if start_input.count() > 0:
-        start_input.click(click_count=3)
-        start_input.fill(new_date)
-        page.wait_for_timeout(200)
-        page.keyboard.press("Tab")           # trigger End Date auto-populate
-        page.wait_for_timeout(800)
-        log(f"  Start date set to {new_date}")
-    else:
-        log(f"  WARNING: Start date input not found in Edit Playweeks modal")
-        page.keyboard.press("Escape")
+    if not _open_playweeks_modal(page):
+        log(f"    WARNING: Playweeks modal did not open — clearing all checkboxes")
+        _clear_all_selections(page)
         return
 
-    # Click Save
-    save_btn = modal.locator('button:has-text("Save")').first
-    if save_btn.count() > 0:
-        save_btn.click()
+    if _fill_playweek_modal_and_save(page, start_date, end_date, skip_weekdays):
         page.wait_for_timeout(1_500)
-        log(f"  Playweek saved ✓  ({theatre_name})")
+        names_str = ", ".join(n for _, n in checked)
+        log(f"    Playweek saved ✓  [{date_label}] → {names_str}")
     else:
-        log(f"  WARNING: Save button not found in Edit Playweeks modal")
+        log("    WARNING: Save button not found — pressing Escape")
         page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+
+    # Clear ALL checked rows — do NOT use stored row indices because Angular
+    # may reorder the table after the Playweeks save, making stored indices
+    # stale and causing leftover checkboxes to bleed into the next group.
+    _clear_all_selections(page)
+
+
+def _update_venue_playweek(page, theatre_name: str, new_date: str, end_date: str = ""):
+    """Single-venue wrapper — delegates to _update_playweeks_for_group."""
+    _update_playweeks_for_group(page, [theatre_name], new_date, end_date)
 
 
 # ---------------------------------------------------------------------------
