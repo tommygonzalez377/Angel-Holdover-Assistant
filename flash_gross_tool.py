@@ -467,6 +467,39 @@ def _parse_one_per_line(raw: str):
                                 columns=['Unit', 'Theatre', 'City', 'Action'],
                                 dtype=str)
 
+    # ── ComScore "Theater #" export: Theater #/Name/Screens/City/DMA/<Film(date)> ──
+    # Different column order from the branch above (Screens at col 2, City at col 3,
+    # film title as the last column). Rows anchored on the unit# by its shape
+    # [number, name-text, number] so 2-digit unit#s ("37") and blank (skipped)
+    # action cells stay aligned. Name resolves to a venue via the DB/alias chain.
+    if (len(first_vals) >= 5
+            and first_vals[0].lower() in ('theatre #', 'theater #')
+            and 'screen' in first_vals[2].lower()
+            and first_vals[3].lower() in ('city', 'theatre city', 'theater city')):
+        _cv_th: list[str] = []
+        for _ln_th in raw.splitlines():
+            if _ln_th.strip():
+                _cv_th.append(_ln_th.strip())
+            elif len(_ln_th) > 0:
+                _cv_th.append('')
+        _isn = lambda s: bool(_re.fullmatch(r'\d{1,4}', s.strip()))
+        _starts2 = [j for j in range(len(_cv_th) - 2)
+                    if _isn(_cv_th[j]) and _cv_th[j + 1] and not _isn(_cv_th[j + 1])
+                    and _isn(_cv_th[j + 2])]
+        _rows_th: list[list[str]] = []
+        for _ix2, _sp2 in enumerate(_starts2):
+            _ep2 = _starts2[_ix2 + 1] if _ix2 + 1 < len(_starts2) else len(_cv_th)
+            _rv2 = list(_cv_th[_sp2:_ep2])
+            if len(_rv2) < 6:
+                _rv2 += [''] * (6 - len(_rv2))
+            _unit2, _name2, _scr2, _city2, _dma2, _act2 = _rv2[:6]
+            _th2 = _re.sub(r'\s*\([^)]*,\s*[A-Z]{2}\)\s*$', '', _name2).strip()
+            _rows_th.append([_unit2, _th2, _city2, _act2])
+        if _rows_th:
+            return pd.DataFrame(_rows_th,
+                                columns=['Unit', 'Theatre', 'City', 'Action'],
+                                dtype=str)
+
     # ── Bare Cinemark format (no underscores — email clients strip __ markers) ─
     _CINEMARK_BARE_FGT = {'DMA', 'SALES', '#', 'THEATRE', 'THEATER', 'SCR', 'SCREENS',
                           'CHAIN', 'CIRCUIT', 'BRCH', 'BRANCH'}

@@ -515,6 +515,10 @@ CITY_VENUE_ALIASES: dict[str, str] = {
     "cinemark city center, newport news":    "Cinemark City Center 12 + XD",
     "rave hazlet 12":                        "Cinemark Hazlet 12",
     "cinemark christiana newark, de":        "Cinemark Christiana 12 + XD",
+    "rave university city 6, philadelphia":  "Cinemark University City Philadelphia 6",
+    "cinemark (moosic), moosic":             "Cinemark Moosic 20 + XD",
+    "cinemark (moosic)":                     "Cinemark Moosic 20 + XD",
+    "cinemark raleigh grande, raleigh":      "Cinemark Raleigh Grand 16",
     # ── Clark Film Buying (bring-back booking) — 3 buyers: Codi Kruse, Ken Kruse, Shayla Schuhriemen ──
     # Booker: Roy Wise.  Theater column uses short/local names; Mica uses full circuit names.
     # "theater" → STOP, so single-word bookings need explicit alias (ratio ≥ 0.8 unachievable).
