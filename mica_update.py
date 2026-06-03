@@ -426,6 +426,44 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
                          'City': _d_csc['City'], 'Action': _act_csc, 'Film': _film_hdr_csc})
         return rows
 
+    # ── ComScore "Theater #" export: Theater #/Name/Screens/City/DMA/<Film(date)> ──
+    # Column order differs from the branch above: Screens at col 2, City at col 3,
+    # NO state column, and the film title (with date) is the last column whose per-row
+    # value is the action (Final / blank). Detected by "screen" at col 2 + "city" at
+    # col 3. Rows are anchored on the unit# by its shape [number, name-text, number]
+    # so 2-digit unit#s (e.g. "37") and blank (skipped) action cells stay aligned.
+    if (len(values) >= 5
+            and values[0].lower() in ('theatre #', 'theater #')
+            and 'screen' in values[2].lower()
+            and values[3].lower() in ('city', 'theatre city', 'theater city')):
+        _is_num = lambda s: bool(_re.fullmatch(r'\d{1,4}', s.strip()))
+        # A row starts at: number (unit#), then non-numeric text (name), then number (screens).
+        # Screens cells are followed by city-text + DMA-text (not a number), so they don't anchor.
+        _starts_th = [j for j in range(len(cell_values) - 2)
+                      if _is_num(cell_values[j])
+                      and cell_values[j + 1] and not _is_num(cell_values[j + 1])
+                      and _is_num(cell_values[j + 2])]
+        _hdrs6_th = ['Unit', 'Theatre', 'Screens', 'City', 'DMA', 'Action']
+        rows = []
+        for _ix, _sp in enumerate(_starts_th):
+            _ep = _starts_th[_ix + 1] if _ix + 1 < len(_starts_th) else len(cell_values)
+            _rv = list(cell_values[_sp:_ep])
+            if len(_rv) < 6:
+                _rv += [''] * (6 - len(_rv))
+            _d = dict(zip(_hdrs6_th, _rv[:6]))
+            # Only strip a trailing "(City, ST)" — keep meaningful parens like "(Moosic)"
+            # since the city is a separate column here.
+            _th = _re.sub(r'\s*\([^)]*,\s*[A-Z]{2}\)\s*$', '', _d['Theatre']).strip()
+            _al = _d['Action'].lower()
+            if 'final' in _al:
+                _act = 'Final'
+            else:
+                _act = 'Hold'   # "hold" or blank → holding over
+            rows.append({'Theatre': _th, 'Unit': _d['Unit'],
+                         'City': _d['City'], 'Action': _act, 'Film': ''})
+        if rows:
+            return rows
+
     # ── Landmark "Location" format: 2-column (Theatre / Status) ────────────────
     # Film title may appear as preamble before the "Location" header.
     # Storage: either one-value-per-line (alternating pairs) OR tab/comma-separated

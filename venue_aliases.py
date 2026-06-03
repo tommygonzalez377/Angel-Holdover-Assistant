@@ -499,6 +499,20 @@ CITY_VENUE_ALIASES: dict[str, str] = {
     "southpark meadows 14":                  "cinemark southpark mall austin 14",
     "movies 8, del rio":                     "cinemark movies del rio 8",
     "cinemark 7, eagle pass":                "cinemark eagle pass 7",
+    # ── David Gundrum (Cinemark East/SE — ComScore "Theater #" format) ───────
+    "tinseltown usa, rochester":             "Cinemark Tinseltown Cinema Rochester 16",
+    "tinseltown usa, erie":                  "Cinemark Tinseltown Erie 17",
+    "tinseltown 14, oak ridge":              "Cinemark Tinseltown Oak Ridge 14",
+    "tinseltown, salisbury":                 "Cinemark Tinseltown Salisbury 14",
+    "cinemark 16, somerdale":                "Cinemark Movies Somerdale 16 + XD",
+    "cinemark 7, asheboro":                  "Cinemark Asheboro 7",
+    "movies 10, wilmington":                 "Cinemark Movies Wilmington 10",
+    "cinemark movies 10, ashland":           "Cinemark Town Cinema Ashland 10",
+    "cinemark mccandless crossing, pittsburgh": "Cinemark North Hills 12 + XD",
+    "cinemark center township, monaca":      "Cinemark Monaca 12",
+    "cinemark 10 bridgeport, bridgeport":    "Cinemark Meadowbrook Mall 10",
+    "the carolina cinemark asheville, asheville": "Cinemark Carolina Asheville 14",
+    "cinemark city center, newport news":    "Cinemark City Center 12 + XD",
     # ── Clark Film Buying (bring-back booking) — 3 buyers: Codi Kruse, Ken Kruse, Shayla Schuhriemen ──
     # Booker: Roy Wise.  Theater column uses short/local names; Mica uses full circuit names.
     # "theater" → STOP, so single-word bookings need explicit alias (ratio ≥ 0.8 unachievable).
