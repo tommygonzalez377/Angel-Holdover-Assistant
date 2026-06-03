@@ -813,6 +813,8 @@ def _do_seed_aliases():
         ('cinemark 10 bridgeport', 'bridgeport', 'Cinemark Meadowbrook Mall 10', 'Cinemark'),
         ('the carolina cinemark asheville', 'asheville', 'Cinemark Carolina Asheville 14', 'Cinemark'),
         ('cinemark city center', 'newport news', 'Cinemark City Center 12 + XD', 'Cinemark'),
+        ('rave hazlet 12', '', 'Cinemark Hazlet 12', 'Cinemark'),
+        ('cinemark christiana newark, de', '', 'Cinemark Christiana 12 + XD', 'Cinemark'),
         ('cinemark hill country galleria 14', 'bee cave', 'Cinemark Hill Country Bee Cave 14', 'Cinemark'),
         ('cinemark mccreless mall 10', 'san antonio', 'Cinemark Mccreless San Antonio 10', 'Cinemark'),
         ('309 cinema 9', '', 'AMC 309 Cinemas North Wales 9', 'AMC'),
