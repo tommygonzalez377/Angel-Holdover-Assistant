@@ -1031,6 +1031,33 @@ def parse_booking_csv(path: Path) -> list[dict]:
                 else:
                     _seen_opl[_hl] = 0
                     _deduped_opl.append(_h)
+            # ── Gundrum ComScore layout (Theater Name / Theater Screens / Theater
+            # City as SEPARATE columns) — NOT Jennifer's "ComScore Name, City, State"
+            # multi-film grid. The grid logic below would treat Name/Screens/City as
+            # film columns → phantom rows (one per column). Delegate to the shared
+            # one-per-line parser, which handles this column order (and 2-digit unit#s).
+            _hl_chk_opl = [h.split('.')[0].strip().lower() for h in _deduped_opl]
+            if any(h in _hl_chk_opl for h in ('theater name', 'theatre name',
+                                              'theater screens', 'theatre screens',
+                                              'theater city', 'theatre city')):
+                _gd_film = next(
+                    (h for h in _deduped_opl
+                     if h.split('.')[0].strip().lower() not in (
+                         'theater #', 'theatre #', 'theater name', 'theatre name',
+                         'theater screens', 'theatre screens', 'theater city',
+                         'theatre city', 'dma', 'screens', 'city', 'st', 'state')
+                     and not _re_pbc.fullmatch(r'\(?\d{1,2}/\d{1,2}/\d{2,4}\)?', h.strip())),
+                    "")
+                _gd_results = []
+                for _gr in _parse_one_per_line_to_dicts(content):
+                    _gd_results.append({
+                        "theatre": _gr.get('Theatre', ''), "city": _gr.get('City', ''),
+                        "action": _gr.get('Action', '') or 'Hold',
+                        "film": _gr.get('Film', '') or _gd_film,
+                        "phrase": "", "screening_type": None})
+                log(f"  [1b-opl->shared] Gundrum layout - delegated to one-per-line "
+                    f"parser -> {len(_gd_results)} results")
+                return _gd_results
             _INFO_COLS_OPL = {'theater #', 'theatre #', 'name (city, state)', 'dma',
                                'screens', 'contact', 'chain', 'circuit', 'branch',
                                # ComScore booking format (Jennifer Hernandez & similar):
