@@ -331,7 +331,7 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
                 chunk += [''] * (n_cols - len(chunk))
             row = dict(zip(headers, chunk))
             if row.get('Action', '') == '':
-                row['Action'] = 'Final'  # blank = confirmed
+                row['Action'] = 'Hold'  # blank = holding over (continuing)
             rows.append(row)
         return rows
 
@@ -530,9 +530,11 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
                 if len(row_data) < n_cols:
                     row_data += [''] * (n_cols - len(row_data))
                 row = dict(zip(headers, row_data[:n_cols]))
-                # Blank action: Final for dunder formats; skip for explicit BOOK column
+                # Blank action = holding over (Hold). Booking tab still books it (Hold is
+                # an active action); Holdover sets it to Hold, not Final. Explicit BOOK
+                # column means blank = skip, so guard on _book_action.
                 if row.get('Action', '') == '' and not _book_action:
-                    row['Action'] = 'Final'
+                    row['Action'] = 'Hold'
                 # Strip "(City, ST)" from Theatre and populate City if missing
                 _th_val = row.get('Theatre', '')
                 _city_m = _THEATRE_RE.search(_th_val)
@@ -551,8 +553,8 @@ def _parse_one_per_line_to_dicts(raw: str) -> list[dict]:
                 if len(chunk) < n_cols:
                     chunk += [''] * (n_cols - len(chunk))
                 row = dict(zip(headers, chunk))
-                if row.get('Action', '') == '':
-                    row['Action'] = 'Final'
+                if row.get('Action', '') == '' and not _book_action:
+                    row['Action'] = 'Hold'  # blank = holding over (was Final)
                 rows.append(row)
             return rows
 
