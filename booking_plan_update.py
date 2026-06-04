@@ -2496,6 +2496,7 @@ _CONTACT_NAME_MAP: dict[str, str] = {
     "mary ann b. silk": "Mary Ann Silk",
     "mary ann b silk":  "Mary Ann Silk",
     "mary ann silk":    "Mary Ann Silk",
+    "mary ann":         "Mary Ann Silk",
 }
 
 def _normalize_contact(name: str) -> str:
