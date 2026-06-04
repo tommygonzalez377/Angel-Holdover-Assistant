@@ -2491,6 +2491,11 @@ _FILTER_TYPE_HINTS: dict = {
 # Contact name normalisation — maps what users type → what Mica has on file
 _CONTACT_NAME_MAP: dict[str, str] = {
     "joshua wymer": "Josh Wymer",
+    # Mary Ann B. Silk — accept with or without the middle initial; Mica stores
+    # her as "Mary Ann Silk", so normalize all variants to that.
+    "mary ann b. silk": "Mary Ann Silk",
+    "mary ann b silk":  "Mary Ann Silk",
+    "mary ann silk":    "Mary Ann Silk",
 }
 
 def _normalize_contact(name: str) -> str:
