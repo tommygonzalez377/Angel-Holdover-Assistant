@@ -1,0 +1,63 @@
+{
+  "booking": {
+    "ok": {
+      "Florence, SC       Final": [
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Ark City, KS"
+        },
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Florence, SC"
+        },
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Guymon, OK"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "Theatre": "Florence, SC"
+      },
+      {
+        "Action": "Final",
+        "Theatre": "Guymon, OK"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "",
+        "film": "",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Florence, SC"
+      },
+      {
+        "action": "Final",
+        "city": "",
+        "film": "",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Guymon, OK"
+      },
+      {
+        "action": "Hold",
+        "city": "",
+        "film": "",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Ark City, KS"
+      }
+    ]
+  }
+}

@@ -1,0 +1,3 @@
+Studio	Cinema	Film	Status	AM	Early Mat	Late Mat	Early Eve	Late Eve
+Angel	Landmark Cinemas Guildford	Animal Farm	Hold	0	1	1	1	1
+Angel	Landmark Cinemas Kanata	Animal Farm	Final	0	0	0	1	1

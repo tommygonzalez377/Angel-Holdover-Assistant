@@ -1,0 +1,2 @@
+Rentrak ID	CIRCUIT	THEATRE	CITY	ST	TITLE	Studio	Playwk	PLAYDATE	COMMENTS
+9999	GTC	GTC Auburn 10	Auburn	AL	Animal Farm	Angel	5/1	5/1/2026	

@@ -1,0 +1,24 @@
+{
+  "booking": {
+    "ok": {
+      "THEATRE\tSCR\tCity\tState": [
+        {
+          "city": "Daly City",
+          "date": "",
+          "theatre": "Century 20 Daly City"
+        },
+        {
+          "city": "San Francisco",
+          "date": "",
+          "theatre": "Century 16 + IMAX"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['THEATRE', 'SCR', 'City', 'State']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": []
+  }
+}

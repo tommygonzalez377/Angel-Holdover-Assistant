@@ -1,0 +1,36 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "",
+          "phrase": "",
+          "theatre": "Landmark Cinemas Kanata"
+        },
+        {
+          "date": "",
+          "phrase": "mats+ee",
+          "theatre": "Landmark Cinemas Guildford"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "AM": "0",
+        "Action": "Final",
+        "Cinema": "Landmark Cinemas Kanata",
+        "Early Eve": "1",
+        "Early Mat": "0",
+        "Film": "Animal Farm",
+        "Late Eve": "1",
+        "Late Mat": "0",
+        "Studio": "Angel"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": []
+  }
+}

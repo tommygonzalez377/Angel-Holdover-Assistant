@@ -1,0 +1,104 @@
+{
+  "booking": {
+    "ok": {
+      "Unknown": [
+        {
+          "city": "Austin",
+          "date": "",
+          "theatre": "Southpark Meadows 14"
+        },
+        {
+          "city": "Spring",
+          "date": "",
+          "theatre": "Cinemark Spring-Klein + XD"
+        },
+        {
+          "city": "The Woodlands",
+          "date": "",
+          "theatre": "Tinseltown 17 + XD"
+        },
+        {
+          "city": "Webster",
+          "date": "",
+          "theatre": "Cinemark 18 + XD"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "",
+        "Buyer": "Allie Fullmer",
+        "DMA": "Houston, TX",
+        "Screens": "12",
+        "Terms": "",
+        "Theatre": "Cinemark Spring-Klein + XD (Spring, TX)",
+        "Unit": "1079"
+      },
+      {
+        "Action": "Final",
+        "Buyer": "Allie Fullmer",
+        "DMA": "Austin, TX",
+        "Screens": "14",
+        "Terms": "",
+        "Theatre": "Southpark Meadows 14 (Austin, TX)",
+        "Unit": "384"
+      },
+      {
+        "Action": "Final",
+        "Buyer": "Allie Fullmer",
+        "DMA": "Houston, TX",
+        "Screens": "17",
+        "Terms": "",
+        "Theatre": "Tinseltown 17 + XD (The Woodlands, TX)",
+        "Unit": "216"
+      },
+      {
+        "Action": "Final",
+        "Buyer": "Allie Fullmer",
+        "DMA": "Houston, TX",
+        "Screens": "18",
+        "Terms": "",
+        "Theatre": "Cinemark 18 + XD (Webster, TX)",
+        "Unit": "295"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "Austin",
+        "film": "",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Southpark Meadows 14"
+      },
+      {
+        "action": "Final",
+        "city": "The Woodlands",
+        "film": "",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Tinseltown 17 + XD"
+      },
+      {
+        "action": "Final",
+        "city": "Webster",
+        "film": "",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Cinemark 18 + XD"
+      },
+      {
+        "action": "Hold",
+        "city": "Spring",
+        "film": "",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Cinemark Spring-Klein + XD"
+      }
+    ]
+  }
+}

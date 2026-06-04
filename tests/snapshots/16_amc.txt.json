@@ -1,0 +1,44 @@
+{
+  "booking": {
+    "ok": {
+      "Unknown": [
+        {
+          "date": "",
+          "theatre": "River East 21"
+        },
+        {
+          "date": "",
+          "theatre": "Yorktown 18"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "Theatre": "River East 21"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "",
+        "film": "",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "River East 21"
+      },
+      {
+        "action": "Hold",
+        "city": "",
+        "film": "",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Yorktown 18"
+      }
+    ]
+  }
+}

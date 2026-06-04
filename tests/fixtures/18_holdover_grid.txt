@@ -1,0 +1,4 @@
+PRELIMINARY HOLD OVERS
+THEATRE	FILM	HOLD	Fr	Sa	Su	Mo	Tu	We	Th	UNDECIDED
+Bainbridge Cinemas	Animal Farm	x								
+Pickford Film Center	Animal Farm		x	x						

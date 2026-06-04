@@ -1,0 +1,64 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "",
+          "theatre": "Malco Cinema 12"
+        },
+        {
+          "date": "",
+          "theatre": "Malco Stadium 12"
+        },
+        {
+          "date": "",
+          "theatre": "Malco Towne 16"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "City": "Ft Smith",
+        "Film": "Animal Farm",
+        "Theatre": "Malco Cinema 12"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "Ft Smith",
+        "film": "Animal Farm",
+        "phrase": "F",
+        "playday_modifier": "",
+        "screening_type": "",
+        "state": "ARK",
+        "theatre": "Malco Cinema 12"
+      },
+      {
+        "action": "Hold",
+        "city": "Jonesboro",
+        "film": "Animal Farm",
+        "phrase": "F TU",
+        "playday_modifier": "tu",
+        "screening_type": "",
+        "state": "AR",
+        "theatre": "Malco Towne 16"
+      },
+      {
+        "action": "Hold",
+        "city": "Southaven",
+        "film": "Animal Farm",
+        "phrase": "H",
+        "playday_modifier": "",
+        "screening_type": "",
+        "state": "MS",
+        "theatre": "Malco Stadium 12"
+      }
+    ]
+  }
+}

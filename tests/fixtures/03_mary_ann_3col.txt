@@ -1,0 +1,4 @@
+Aberdeen	Animal Farm	Final
+Bloomington	Animal Farm	Hold
+Minot	Animal Farm	Open
+Bluefield	Animal Farm	Final

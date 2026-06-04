@@ -1,0 +1,18 @@
+dma_name
+theater_name
+city
+state
+title
+status
+Houston
+Cinemark Webster 18
+Webster
+TX
+Animal Farm
+Final
+Austin
+Cinemark Round Rock 14
+Round Rock
+TX
+Animal Farm
+Hold

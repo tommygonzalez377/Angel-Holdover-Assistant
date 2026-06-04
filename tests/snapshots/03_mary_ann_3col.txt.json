@@ -1,0 +1,63 @@
+{
+  "booking": {
+    "ok": {
+      "Bloomington\tAnimal Farm\tHold": [
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Bloomington"
+        },
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Bluefield"
+        },
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Minot"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "Theatre": "Aberdeen\tAnimal Farm"
+      },
+      {
+        "Action": "Final",
+        "Theatre": "Bluefield\tAnimal Farm"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Aberdeen"
+      },
+      {
+        "action": "Final",
+        "city": "",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Bluefield"
+      },
+      {
+        "action": "Hold",
+        "city": "",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Bloomington"
+      }
+    ]
+  }
+}

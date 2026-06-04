@@ -1,0 +1,4 @@
+Animal Farm
+ID #	Screens	Theatre	DMA	Animal Farm
+8320	17	Cinemark Tinseltown Fayetteville 17 (Fayetteville, AR)	Ft Smith	Final
+7568	16	Cinemark Tinseltown 290 Houston (Houston, TX)	Houston	Hold

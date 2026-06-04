@@ -1,0 +1,24 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "",
+          "phrase": "Multiple Matinees",
+          "theatre": "Imagine Market Mall"
+        },
+        {
+          "date": "",
+          "phrase": "Prime",
+          "theatre": "Cinestarz Brampton"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['Booking Week', 'Group', 'Theatre', 'Title', 'Language', 'Showtime', 'O/H', 'Dist']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": []
+  }
+}

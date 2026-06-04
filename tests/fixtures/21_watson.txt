@@ -1,0 +1,3 @@
+Booking Week	Group	Theatre Name	Title	Language	Showtime	O/H	Dist
+5/1	Imagine	Imagine Market Mall	Animal Farm	EN	mats	H	Angel
+5/1	Cinestarz	Cinestarz Brampton	Animal Farm	EN	prime	O	Angel

@@ -1,0 +1,11 @@
+{
+  "booking": {
+    "ok": {}
+  },
+  "flash": {
+    "system_exit": "ERROR: Could not parse pasted data: Expected 13 fields in line 3, saw 14\nMake sure you copy the full table including the header row."
+  },
+  "holdover": {
+    "ok": []
+  }
+}

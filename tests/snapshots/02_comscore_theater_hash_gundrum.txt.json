@@ -1,0 +1,92 @@
+{
+  "booking": {
+    "ok": {
+      "Theater Name": [
+        {
+          "city": "Rochester",
+          "date": "",
+          "theatre": "Tinseltown USA"
+        },
+        {
+          "city": "Salisbury",
+          "date": "",
+          "theatre": "Tinseltown"
+        },
+        {
+          "city": "Watchung",
+          "date": "",
+          "theatre": "Cinemark Watchung and XD"
+        },
+        {
+          "city": "Wilmington",
+          "date": "",
+          "theatre": "Movies 10"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "(5/1/2026)": "",
+        "Action": "Final",
+        "Animal Farm": "Final",
+        "City": "",
+        "DMA": "Charlotte, NC",
+        "Theater City": "Salisbury",
+        "Theater Screens": "14",
+        "Theatre": "Tinseltown",
+        "_cinemark_id": "243",
+        "_film_cols": "Animal Farm,(5/1/2026)"
+      },
+      {
+        "(5/1/2026)": "37",
+        "Action": "Final",
+        "Animal Farm": "Final",
+        "City": "",
+        "DMA": "Rochester, NY",
+        "Theater City": "Rochester",
+        "Theater Screens": "17",
+        "Theatre": "Tinseltown USA",
+        "_cinemark_id": "202",
+        "_film_cols": "Animal Farm,(5/1/2026)"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "Rochester",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Tinseltown USA"
+      },
+      {
+        "action": "Final",
+        "city": "Salisbury",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Tinseltown"
+      },
+      {
+        "action": "Final",
+        "city": "Wilmington",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Movies 10"
+      },
+      {
+        "action": "Hold",
+        "city": "Watchung",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Cinemark Watchung and XD"
+      }
+    ]
+  }
+}

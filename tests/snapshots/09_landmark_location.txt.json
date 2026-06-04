@@ -1,0 +1,48 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Landmark Guildford 12"
+        },
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Landmark Kitchener 8"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "Film": "Animal Farm",
+        "Phrase": "finished",
+        "Theatre": "Landmark Guildford 12"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "",
+        "film": "Animal Farm",
+        "phrase": "finished",
+        "screening_type": "",
+        "theatre": "Landmark Guildford 12"
+      },
+      {
+        "action": "Hold",
+        "city": "",
+        "film": "Animal Farm",
+        "phrase": "holding",
+        "screening_type": "",
+        "theatre": "Landmark Kitchener 8"
+      }
+    ]
+  }
+}

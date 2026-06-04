@@ -1,0 +1,22 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "04/30",
+          "theatre": "Caribbean Cinemas Montehiedra"
+        },
+        {
+          "date": "04/30",
+          "theatre": "Caribbean Cinemas Plaza Las Americas"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: Could not parse pasted data: Expected 4 fields in line 3, saw 5\nMake sure you copy the full table including the header row."
+  },
+  "holdover": {
+    "ok": []
+  }
+}

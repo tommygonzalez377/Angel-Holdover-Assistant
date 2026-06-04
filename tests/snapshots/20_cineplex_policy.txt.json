@@ -1,0 +1,19 @@
+{
+  "booking": {
+    "ok": {
+      "2222 - CPX Scotiabank\tAnimal Farm\tMultiple Matinees": [
+        {
+          "city": "",
+          "date": "",
+          "theatre": "2222 - CPX Scotiabank"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['2111 - CPX McGillivray', 'Animal Farm', 'Alternating']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": []
+  }
+}

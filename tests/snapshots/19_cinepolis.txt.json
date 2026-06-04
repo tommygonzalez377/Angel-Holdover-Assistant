@@ -1,0 +1,24 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "",
+          "phrase": "final",
+          "theatre": "Cinepolis Vista"
+        },
+        {
+          "date": "",
+          "phrase": "hold",
+          "theatre": "Moviehouse & Eatery"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['Cinepolis Vista (Vista', 'CA)']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": []
+  }
+}

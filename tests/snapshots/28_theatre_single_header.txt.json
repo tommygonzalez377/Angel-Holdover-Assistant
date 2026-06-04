@@ -1,0 +1,36 @@
+{
+  "booking": {
+    "ok": {}
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "City": "Rosenberg, TX",
+        "Film": "",
+        "Terms": "Final",
+        "Theatre": "Cinemark 12"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "Rosenberg, TX",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Cinemark 12"
+      },
+      {
+        "action": "Hold",
+        "city": "Round Rock, TX",
+        "film": "Animal Farm",
+        "phrase": "Hold",
+        "screening_type": "",
+        "theatre": "Cinemark 14"
+      }
+    ]
+  }
+}

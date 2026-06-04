@@ -1,0 +1,20 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "05/01",
+          "end_date": "05/01",
+          "explicit_dates": "[]",
+          "theatre": "Paragon Village 12"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['Theater\\tCity', 'ST\\tTitle\\tDate\\tFormat\\tAdmission']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": []
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "city": "Round Rock",
+          "date": "",
+          "theatre": "Cinemark Round Rock 14"
+        },
+        {
+          "city": "Webster",
+          "date": "",
+          "theatre": "Cinemark Webster 18"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "City": "Webster",
+        "DMA": "Houston",
+        "Film": "Animal Farm",
+        "State": "TX",
+        "Theatre": "Cinemark Webster 18"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "Webster",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Cinemark Webster 18"
+      },
+      {
+        "action": "Hold",
+        "city": "Round Rock",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Cinemark Round Rock 14"
+      }
+    ]
+  }
+}

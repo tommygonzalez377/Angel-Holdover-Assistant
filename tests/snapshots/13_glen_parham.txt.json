@@ -1,0 +1,54 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "5/1",
+          "phrase": "final",
+          "theatre": "GTC University 16"
+        },
+        {
+          "date": "5/1",
+          "phrase": "hold",
+          "theatre": "Regal Mall Of Georgia Buford 20 & IMAX"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "Circuit": "GTC",
+        "City": "Athens",
+        "DIST": "ANG",
+        "FSS": "x",
+        "Playwk": "5/1",
+        "ST": "GA",
+        "Theatre": "GTC Beechwood 18",
+        "Title": "Animal Farm",
+        "WK#": "2"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "Athens",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "GTC University 16"
+      },
+      {
+        "action": "Hold",
+        "city": "Buford",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Regal Mall Of Georgia Buford 20 & IMAX"
+      }
+    ]
+  }
+}

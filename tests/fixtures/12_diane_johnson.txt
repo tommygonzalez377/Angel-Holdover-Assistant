@@ -1,0 +1,3 @@
+CIRCUIT	THEATRE	CITY	STATE	Animal Farm - 5/1
+Marcus	Marcus Majestic Cinema	Brookfield	WI	Final
+Marcus	Marcus Point Cinema	Madison	WI	Hold

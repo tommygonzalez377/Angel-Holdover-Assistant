@@ -1,0 +1,4 @@
+Animal Farm
+THEATRE	SCR	
+Cinemark 16 Albuquerque	16	Final
+Century Rio 24	24	Hold

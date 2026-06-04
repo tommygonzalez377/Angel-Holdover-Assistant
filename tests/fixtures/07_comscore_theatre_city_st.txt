@@ -1,0 +1,20 @@
+Theatre #
+ComScore Name, City, State
+City
+ST
+Screens
+DMA
+Animal Farm
+9023
+Cinemark 18 (Webster, TX)
+Webster
+TX
+18
+Houston
+Final
+8560
+Cinemark 19 (Katy, TX)
+Katy
+TX
+19
+Houston

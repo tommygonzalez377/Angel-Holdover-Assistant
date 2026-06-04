@@ -1,0 +1,26 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "",
+          "theatre": "Regal Downtown 12"
+        },
+        {
+          "date": "",
+          "theatre": "Regal Riverside 8"
+        },
+        {
+          "date": "",
+          "theatre": "Thanks,"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['Hi team', 'Unnamed: 1']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": []
+  }
+}

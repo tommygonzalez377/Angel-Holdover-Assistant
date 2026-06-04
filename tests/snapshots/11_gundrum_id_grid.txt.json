@@ -1,0 +1,41 @@
+{
+  "booking": {
+    "ok": {
+      "ID #\tScreens\tTheatre\tDMA\tAnimal Farm": [
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Cinemark Tinseltown 290 Houston (Houston, TX)"
+        },
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Cinemark Tinseltown Fayetteville 17 (Fayetteville, AR)"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['ID #', 'Screens', 'Theatre', 'DMA', 'Animal Farm']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "Fayetteville",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Cinemark Tinseltown Fayetteville 17"
+      },
+      {
+        "action": "Hold",
+        "city": "Houston",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Cinemark Tinseltown 290 Houston"
+      }
+    ]
+  }
+}

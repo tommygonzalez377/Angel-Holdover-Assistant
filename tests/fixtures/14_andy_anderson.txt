@@ -1,0 +1,4 @@
+Animal Farm
+THEATRE	SCR	City	State
+Century 16 + IMAX	16	San Francisco	CA
+Century 20 Daly City	20	Daly City	CA

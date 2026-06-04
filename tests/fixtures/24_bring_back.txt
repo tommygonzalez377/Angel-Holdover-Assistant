@@ -1,0 +1,2 @@
+Theater	City, ST	Title	Date	Format	Admission
+Paragon Village 12	Fredericksburg, VA	Animal Farm	5/1/2026	2D	1

@@ -1,0 +1,47 @@
+{
+  "booking": {
+    "ok": {
+      "THEATRE\tSCR": [
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Century Rio 24"
+        },
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Cinemark 16 Albuquerque"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "Film": "16",
+        "Theatre": "Cinemark 16 Albuquerque"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Cinemark 16 Albuquerque"
+      },
+      {
+        "action": "Hold",
+        "city": "",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Century Rio 24"
+      }
+    ]
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "booking": {
+    "ok": {
+      "Marcus\tMarcus Majestic Cinema\tBrookfield\tWI\tFinal": [
+        {
+          "city": "Brookfield",
+          "date": "",
+          "theatre": "Marcus Majestic Cinema"
+        },
+        {
+          "city": "Madison",
+          "date": "",
+          "theatre": "Marcus Point Cinema"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['CIRCUIT', 'THEATRE', 'CITY', 'STATE', 'Animal Farm - 5/1']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "Brookfield",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Marcus Majestic Brookfield 16"
+      },
+      {
+        "action": "Hold",
+        "city": "Madison",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Marcus Point Madison 16"
+      }
+    ]
+  }
+}

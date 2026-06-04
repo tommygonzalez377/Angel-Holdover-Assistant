@@ -1,0 +1,30 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "",
+          "theatre": "Cinema 6"
+        },
+        {
+          "date": "",
+          "theatre": "Highland Cinema"
+        },
+        {
+          "date": "",
+          "theatre": "Jerseyville"
+        },
+        {
+          "date": "",
+          "theatre": "Litchfield Sky View"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['Jerseyville', 'Cinema 6', 'Highland Cinema', 'Litchfield Sky View opening Animal Farm']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": []
+  }
+}

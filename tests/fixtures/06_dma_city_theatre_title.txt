@@ -1,0 +1,24 @@
+DMA
+City
+Theatre
+Title
+Print
+Attributes
+Status
+Detail
+Dallas - Ft. Worth
+Plano
+Cinemark West Plano
+Animal Farm
+D-Cin
+2D
+Final
+x
+Dallas - Ft. Worth
+Allen
+Cinemark Allen 16
+Animal Farm
+D-Cin
+2D
+Hold
+y

@@ -1,0 +1,36 @@
+{
+  "booking": {
+    "ok": {
+      "Unknown": [
+        {
+          "date": "",
+          "theatre": "NorthPark 15"
+        },
+        {
+          "date": "04/30",
+          "theatre": "Mesquite 30"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "Theatre": "NorthPark 15"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "",
+        "film": "",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "NorthPark 15"
+      }
+    ]
+  }
+}

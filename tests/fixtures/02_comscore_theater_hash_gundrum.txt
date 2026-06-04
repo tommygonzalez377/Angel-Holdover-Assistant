@@ -1,0 +1,31 @@
+Theater #
+Theater Name
+Theater Screens
+Theater City
+DMA
+Animal Farm
+(5/1/2026)
+202
+Tinseltown USA
+17
+Rochester
+Rochester, NY
+Final
+37
+Movies 10
+10
+Wilmington
+Philadelphia, DE
+Final
+1151
+Cinemark Watchung and XD
+10
+Watchung
+New York, NY, NJ
+ 
+243
+Tinseltown
+14
+Salisbury
+Charlotte, NC
+Final

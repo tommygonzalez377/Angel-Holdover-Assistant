@@ -1,0 +1,30 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Cinemark Katy 19"
+        },
+        {
+          "city": "",
+          "date": "",
+          "theatre": "Cinemark Webster 18"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "Film": "Animal Farm",
+        "Theatre": "Cinemark Webster 18"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": []
+  }
+}

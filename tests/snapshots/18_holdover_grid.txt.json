@@ -1,0 +1,41 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "",
+          "phrase": "final",
+          "theatre": "Pickford Film Center"
+        },
+        {
+          "date": "",
+          "phrase": "hold",
+          "theatre": "Bainbridge Cinemas"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "0"
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Pickford Film Center"
+      },
+      {
+        "action": "Hold",
+        "city": "",
+        "film": "Animal Farm",
+        "phrase": "",
+        "screening_type": "",
+        "theatre": "Bainbridge Cinemas"
+      }
+    ]
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "booking": {
+    "ok": {
+      "x": [
+        {
+          "date": "",
+          "phrase": "final",
+          "theatre": "2D"
+        }
+      ],
+      "y": [
+        {
+          "date": "",
+          "phrase": "hold",
+          "theatre": "2D"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "City": "Plano",
+        "Film": "Animal Farm",
+        "Terms": "x",
+        "Theatre": "Cinemark West Plano"
+      },
+      {
+        "Action": "Hold",
+        "City": "Allen",
+        "Film": "Animal Farm",
+        "Terms": "y",
+        "Theatre": "Cinemark Allen 16"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "Plano",
+        "film": "Animal Farm",
+        "phrase": "x",
+        "screening_type": "",
+        "theatre": "Cinemark West Plano"
+      },
+      {
+        "action": "Hold",
+        "city": "Allen",
+        "film": "Animal Farm",
+        "phrase": "y",
+        "screening_type": "",
+        "theatre": "Cinemark Allen 16"
+      }
+    ]
+  }
+}

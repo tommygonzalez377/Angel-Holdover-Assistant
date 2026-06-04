@@ -1,0 +1,55 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "city": "Katy",
+          "date": "",
+          "theatre": "Cinemark 19"
+        },
+        {
+          "city": "Webster",
+          "date": "",
+          "theatre": "Cinemark 18"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "ok": [
+      {
+        "Action": "Final",
+        "Animal Farm": "Final",
+        "City": "Webster",
+        "DMA": "Houston",
+        "ST": "TX",
+        "Screens": "18",
+        "Theatre": "Cinemark 18",
+        "_cinemark_id": "9023",
+        "_film_cols": "Animal Farm"
+      }
+    ]
+  },
+  "holdover": {
+    "ok": [
+      {
+        "action": "Final",
+        "city": "Webster",
+        "film": "Animal Farm",
+        "phrase": "",
+        "playday_modifier": "",
+        "screening_type": "",
+        "theatre": "Cinemark 18"
+      },
+      {
+        "action": "Hold",
+        "city": "Katy",
+        "film": "Animal Farm",
+        "phrase": "",
+        "playday_modifier": "",
+        "screening_type": "",
+        "theatre": "Cinemark 19"
+      }
+    ]
+  }
+}

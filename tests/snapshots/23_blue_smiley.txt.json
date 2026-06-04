@@ -1,0 +1,19 @@
+{
+  "booking": {
+    "ok": {
+      "Animal Farm": [
+        {
+          "date": "5/1",
+          "phrase": "",
+          "theatre": "GTC Auburn 10"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['Rentrak ID', 'CIRCUIT', 'THEATRE', 'CITY', 'ST', 'TITLE', 'Studio', 'Playwk', 'PLAYDATE', 'COMMENTS']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": []
+  }
+}
