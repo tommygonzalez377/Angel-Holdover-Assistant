@@ -1,20 +1,25 @@
 {
   "booking": {
     "ok": {
-      "Bloomington\tAnimal Farm\tHold": [
+      "Animal Farm": [
         {
-          "city": "",
           "date": "",
+          "phrase": "",
+          "theatre": "Aberdeen"
+        },
+        {
+          "date": "",
+          "phrase": "",
           "theatre": "Bloomington"
         },
         {
-          "city": "",
           "date": "",
+          "phrase": "",
           "theatre": "Bluefield"
         },
         {
-          "city": "",
           "date": "",
+          "phrase": "",
           "theatre": "Minot"
         }
       ]

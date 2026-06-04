@@ -1051,6 +1051,37 @@ def _parse_landmark_canada_booking(text: str) -> dict[str, list[dict]]:
 
 _CINEPOLIS_CITY_SUFFIX = re.compile(r'\s*\([^)]+,\s*[A-Z]{2}\)')
 
+_MA_SPLIT_BP = re.compile(r'\t+|  +')   # tab(s) or 2+ spaces
+_MA_HFO_BP = {'hold', 'final', 'open'}
+
+
+def _parse_mary_ann_3col(text: str) -> dict[str, list[dict]]:
+    """Mary Ann B. Silk headerless 3-column format: "Theatre <sep> Film <sep> Action"
+    where <sep> is a tab or 2+ spaces and Action is Final/Hold/Open. Mirror of the
+    Holdover's [ma-3col] parser (mica_update) so the Booking Assistant handles it too.
+    For Booking, all three actions are active bookings (final/hold/open all book)."""
+    lines = [l for l in text.splitlines() if l.strip()]
+    rows = []
+    for l in lines:
+        cols = [c.strip() for c in _MA_SPLIT_BP.split(l.strip())]
+        # Be strict to avoid stealing other tab formats: EXACTLY 3 columns, last is
+        # Final/Hold/Open, and the MIDDLE column is a film name (non-numeric) — this
+        # rules out Gundrum/Diane-Johnson (5 cols) and Jennifer Solorzano (Theatre/SCR/
+        # Action, where the middle col is a screen-count number).
+        if (len(cols) == 3 and cols[2].lower() in _MA_HFO_BP
+                and cols[1] and not cols[1].replace(' ', '').isdigit()):
+            rows.append(cols)
+    if len(rows) < 2:
+        return {}
+    results: dict[str, list[dict]] = {}
+    for cols in rows:
+        theatre = cols[0].strip()
+        film    = cols[1].strip() or "Unknown"
+        results.setdefault(film, []).append({"theatre": theatre, "date": None, "phrase": ""})
+    log(f"  [ma-3col-bpa] Mary Ann 3-col format — "
+        f"{sum(len(v) for v in results.values())} venue(s) across {len(results)} film(s)")
+    return results
+
 
 def _parse_cinepolis_booking(text: str) -> dict[str, list[dict]]:
     """
@@ -1329,6 +1360,12 @@ def parse_open_bookings(text: str) -> dict[str, list[dict]]:
         _hg_result = _parse_holdover_grid_booking(text)
         if _hg_result:
             return _hg_result
+        # ── Mary Ann 3-col headerless: Theatre <tab/2+sp> Film <tab/2+sp> Final|Hold|Open ──
+        # (mirror of the Holdover's [ma-3col]; the Booking tab lacked it, so this format
+        #  used to fall through to the delimited fallback and produce garbage film keys)
+        _ma_result = _parse_mary_ann_3col(text)
+        if _ma_result:
+            return _ma_result
         # ── Cinepolis / Moviehouse 3-line-per-venue: VenueName / FINAL|HOLD / Film ──
         _cp_result = _parse_cinepolis_booking(text)
         if _cp_result:
