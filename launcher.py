@@ -1506,7 +1506,7 @@ function micaAppendLine(text, cls) {
 
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    b.classList.toggle('active', ['holdover','booking','mass','sheets','predictor','boxoffice'][i] === name);
+    b.classList.toggle('active', ['holdover','booking','mass','sheets','coverage','predictor','boxoffice'][i] === name);
   });
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
