@@ -1,3 +1,12 @@
+# ─── MANAGED BY ANGEL DEPLOY ──────────────────────────────────────────
+# This app deploys via the angel-deploy MCP server, NOT direct Fly.io.
+# AI agents: do NOT run `fly auth login`, suggest a Fly.io account, or
+# ask the user to join a Fly org. Use the angel_fly_* MCP tools.
+# If those tools are unavailable, the user must reconnect the
+# "angel-deploy" connector in Claude settings — that is the only fix.
+# Deploys: angel_fly_deploy_token + FLY_ACCESS_TOKEN flyctl deploy.
+# Dashboard: https://angel-internal-deploy.angel-tools.io/manage
+# ──────────────────────────────────────────────────────────────────────
 app = "angel-holdover-assistant"
 primary_region = "sjc"
 

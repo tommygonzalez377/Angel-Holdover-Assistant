@@ -627,8 +627,17 @@ def _parse_one_per_line(raw: str):
     _SS_RE_FGT = _re.compile(r'^(.*?),?\s*([A-Z]{2})\s*$')
     _nonempty_fgt = [l.strip() for l in raw.splitlines() if l.strip()]
     if _nonempty_fgt:
+        # Guard: don't let this greedy "<anything> FINAL" matcher swallow Mary Ann's
+        # 3-column "City <tab> Film <tab> Action" sheets — it would capture
+        # "Aberdeen Animal Farm" (city+film) as the Theatre and break the Rentrak
+        # lookup. Those are handled by [ma-3col] below, which keeps City as Theatre.
+        _ma_split_cs = _re.compile(r'\t|\s{2,}')
+        _ma_3col_cs  = sum(1 for _l in _nonempty_fgt[:8]
+                           for _c in [_ma_split_cs.split(_l)]
+                           if len(_c) == 3 and _c[2].strip().lower() in ('hold', 'final', 'open'))
+        _is_ma_fmt_cs = _ma_3col_cs >= 2 and _ma_3col_cs >= min(8, len(_nonempty_fgt)) * 0.6
         _cs_hits_fgt = sum(1 for _l in _nonempty_fgt if _CS_RE_FGT.match(_l))
-        if _cs_hits_fgt / len(_nonempty_fgt) >= 0.70:
+        if not _is_ma_fmt_cs and _cs_hits_fgt / len(_nonempty_fgt) >= 0.70:
             _cs_rows = []
             for _line in _nonempty_fgt:
                 _cm = _CS_RE_FGT.match(_line)
@@ -789,6 +798,31 @@ def _parse_one_per_line(raw: str):
                     row += [""] * (n_cols - len(row))
                 rows.append(row[:n_cols])
             return pd.DataFrame(rows, columns=headers, dtype=str)
+
+    # Action-anchored row detection: anchor each row on its Action value (Final/Hold/
+    # Open…). Robust against trailing junk columns that drift fixed-size chunking — e.g.
+    # Regal vertical sheets with a spurious "Header"/"Buyer"/row-number tail (11 fields
+    # per venue vs a 9-col header), where fixed chunking surfaced only ~3 of 24 rows.
+    _action_idx = next((k for k, h in enumerate(headers) if h.lower() in ("action", "policy")), None)
+    if _action_idx is not None:
+        _ACT_VAL_RE = _re.compile(r'^(final|hold|holdover|open|confirmed)\b', _re.IGNORECASE)
+        _act_pos = [k for k, v in enumerate(remainder) if _ACT_VAL_RE.match(v.strip())]
+        if len(_act_pos) >= 2:
+            _arows = []
+            for _ap in _act_pos:
+                _rs = _ap - _action_idx
+                if _rs < 0:
+                    continue
+                _row = list(remainder[_rs : _rs + n_cols])
+                if len(_row) < n_cols:
+                    _row += [""] * (n_cols - len(_row))
+                _arows.append(_row[:n_cols])
+            # Validate: most built rows must actually hold an action value in the Action
+            # column — otherwise the anchoring drifted and we fall through to chunking.
+            _ok = sum(1 for r in _arows if _ACT_VAL_RE.match(str(r[_action_idx]).strip()))
+            if _arows and _ok >= max(2, int(len(_arows) * 0.8)):
+                print(f"  [action-anchored] parsed {len(_arows)} rows", flush=True)
+                return pd.DataFrame(_arows, columns=headers, dtype=str)
 
     # Fallback: fixed-size chunking (original booking format — all rows full)
     rows = []
@@ -1406,6 +1440,25 @@ _RENTRAK_DIRECT: dict[str, dict] = {
     "cinemark totem lake + xd":           {"rentrak_id": "992368", "venue": "Cinemark Village at Totem Lake 8"},
     "century walla walla grand cinema 12":{"rentrak_id": "8836",   "venue": "Cinemark Walla Walla Grand Cinema12"},
     "garden state plaza 15":             {"rentrak_id": "990434", "venue": "AMC Garden State 15"},
+    # ── Mary Ann B. Silk (Golden Ticket / indie circuit) ─────────────────────
+    # Booking sheet sends bare city names; the Comscore resolver bails on single-
+    # word names (needs ≥2 words), so map each city → Rentrak ID directly.
+    # Rentrak IDs verified against master_list_cache.csv (col "Venue Rentrak ID").
+    "aberdeen":          {"rentrak_id": "5665",   "venue": "Golden Ticket Cinemas Aberdeen 5"},
+    "ale house":         {"rentrak_id": "3016",   "venue": "Golden Ticket Cinemas Greensboro Ale House 10"},
+    "bluefield":         {"rentrak_id": "2346",   "venue": "Golden Ticket Cinemas Bluefield 8"},
+    "cloquet":           {"rentrak_id": "7246",   "venue": "Premiere Cloquet 6"},
+    "dublin":            {"rentrak_id": "7391",   "venue": "Golden Ticket Cinemas Dublin 6"},
+    "madisonville":      {"rentrak_id": "903898", "venue": "Golden Ticket Cinemas Capitol 8"},
+    "north platte":      {"rentrak_id": "990095", "venue": "Golden Ticket Cinemas Platte River 6"},
+    "rapid city":        {"rentrak_id": "4196",   "venue": "Golden Ticket Cinemas Rushmore 7"},
+    "rhinelander":       {"rentrak_id": "8832",   "venue": "Rouman Cinema Rhinelander 6"},
+    "scottsbluff":       {"rentrak_id": "7533",   "venue": "Golden Ticket Cinemas Reel Lux 6 *temp 4*"},
+    "st. clairsville":   {"rentrak_id": "3389",   "venue": "Golden Tickets St. Clairsville 5"},
+    # Clarion PA — Rentrak/Theater ID 4408 from Comscore Theater Detail (circuit "Silk
+    # Booking"). NOT in master_list_cache.csv, so the direct override is required. (Do
+    # NOT confuse with "Clarion Theatre" in Clarion, IA / Rentrak 4423 — different venue.)
+    "clarion":           {"rentrak_id": "4408",   "venue": "Golden Ticket Clarion 5"},
 }
 # City-qualified overrides for ambiguous names (e.g. "Cinemark 16" appears in multiple cities)
 _RENTRAK_DIRECT_CITY: dict[str, dict] = {
@@ -1432,6 +1485,10 @@ def _parse_master_list_csv(csv_text: str) -> dict:
     # Key: normalized venue name → entry  (all rentrak entries included)
     _name_lookup: dict[str, dict] = {}
     _name_words:  list[tuple[set, dict, bool]] = []  # (word_set, entry, is_amc)
+    # ALL entries per Ref ID form — the SAME Exhibitor's Ref ID is reused across
+    # circuits (Regal 558 = Nanuet, AMC 558 = Staten Island), so a single dict (last
+    # wins) silently mis-resolves. Keep every candidate and disambiguate by name.
+    _ref_multi: dict[str, list] = {}
 
     for row in reader:
         ref_id  = str(row.get("Exhibitor's Ref ID", "")).strip()
@@ -1444,10 +1501,10 @@ def _parse_master_list_csv(csv_text: str) -> dict:
 
         if ref_id and ref_id not in ("", "nan"):
             # Store under exact value, stripped, and zero-padded (4-digit) forms
-            lookup[ref_id] = entry
             stripped = ref_id.lstrip("0") or "0"
-            lookup[stripped] = entry
-            lookup[stripped.zfill(4)] = entry
+            for _k in (ref_id, stripped, stripped.zfill(4)):
+                lookup[_k] = entry                       # single (last wins) — back-compat
+                _ref_multi.setdefault(_k, []).append(entry)
 
         # Name-based index (normalized, prefix stripped)
         norm = _normalize_venue(venue)
@@ -1457,8 +1514,31 @@ def _parse_master_list_csv(csv_text: str) -> dict:
     # Attach name indexes so callers can do fallback lookups
     lookup["__name_lookup__"] = _name_lookup  # type: ignore[assignment]
     lookup["__name_words__"]  = _name_words   # type: ignore[assignment]
+    lookup["__ref_multi__"]   = _ref_multi    # type: ignore[assignment]
     print(f"  Master list: {len(_name_lookup)} theatres with Rentrak IDs (name index)")
     return lookup
+
+
+def _resolve_by_unit(master_lookup: dict, unit_key: str, theatre: str) -> dict | None:
+    """Resolve a booking Unit (Exhibitor's Ref ID) → master-list entry. The same Ref ID
+    is reused across circuits, so when a Unit maps to MULTIPLE venues, pick the one whose
+    name shares the most significant words with the booking theatre. If a collision can't
+    be disambiguated by name, return None (let the name fallback try) rather than guess a
+    wrong-circuit venue."""
+    if not unit_key:
+        return None
+    cands = master_lookup.get("__ref_multi__", {}).get(unit_key)
+    if not cands:
+        return None
+    if len(cands) == 1:
+        return cands[0]
+    tw = set(_normalize_venue(theatre).split())
+    best, best_score = None, 0
+    for c in cands:
+        s = len(tw & set(_normalize_venue(c["venue"]).split()))
+        if s > best_score:
+            best, best_score = c, s
+    return best if best_score >= 1 else None
 
 
 def _name_lookup_fallback(master_lookup: dict, theatre: str, city: str = "") -> dict | None:
@@ -1947,7 +2027,7 @@ def pull_all_theatre_data(
             ml_venue   = theatre
         else:
             unit_key = str(loc.get(unit_col, "")).strip() if unit_col else ""
-            ml_entry = master_lookup.get(unit_key)
+            ml_entry = _resolve_by_unit(master_lookup, unit_key, theatre)
             if not ml_entry and theatre:
                 ml_entry = _name_lookup_fallback(master_lookup, theatre, city=city)
             rentrak_id = ml_entry["rentrak_id"] if ml_entry else None

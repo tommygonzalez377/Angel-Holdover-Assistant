@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Theatrical Slate Fit — Angel Studios</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #111827;
+  color: #f1f5f9;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+.header {
+  background: #1a2035;
+  border-bottom: 1px solid #2d3748;
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  height: 56px;
+}
+.header h1 { font-size: 18px; font-weight: 700; color: #f97316; white-space: nowrap; flex-shrink: 0; }
+.controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; flex: 1; }
+.controls label { font-size: 13px; color: #9ca3af; white-space: nowrap; }
+
+select, input[type=text], input[type=number] {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #374151;
+  background: #1f2937;
+  color: #f1f5f9;
+  font-size: 13px;
+}
+select:focus, input:focus { outline: 2px solid #f97316; outline-offset: 0; }
+
+button {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid #374151;
+  background: #1f2937;
+  color: #f1f5f9;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover { background: #2d3748; }
+button.primary { background: #f97316; border-color: #f97316; color: white; font-weight: 600; }
+button.primary:hover { background: #ea6c0a; }
+button.ghost { background: transparent; border-color: #374151; }
+
+/* ── Layout ── */
+.layout {
+  display: flex;
+  height: calc(100vh - 56px);
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  width: 270px;
+  flex-shrink: 0;
+  background: #1a2035;
+  border-right: 1px solid #2d3748;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-block {
+  padding: 14px 16px;
+  border-bottom: 1px solid #2d3748;
+}
+.sidebar-block h3 {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #6b7280;
+  margin-bottom: 10px;
+}
+
+.film-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+}
+.film-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; }
+.film-row-info { flex: 1; min-width: 0; }
+.film-row-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.film-row-meta { font-size: 11px; color: #6b7280; }
+.film-row.is-angel .film-row-title { color: #fbbf24; }
+
+.badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-left: 3px;
+}
+.badge-angel { background: rgba(251,191,36,0.15); color: #fbbf24; border: 1px solid rgba(251,191,36,0.3); }
+.badge-hypo { background: rgba(251,191,36,0.08); color: #d97706; border: 1px solid rgba(217,119,6,0.3); }
+
+/* Hypo inputs */
+.toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+.toggle { position: relative; width: 34px; height: 18px; flex-shrink: 0; }
+.toggle input { display: none; }
+.toggle-slider {
+  position: absolute; inset: 0;
+  background: #374151; border-radius: 9px; cursor: pointer; transition: background 0.2s;
+}
+.toggle-slider::after {
+  content: ''; position: absolute; left: 2px; top: 2px;
+  width: 14px; height: 14px; background: white; border-radius: 50%; transition: transform 0.2s;
+}
+.toggle input:checked + .toggle-slider { background: #f97316; }
+.toggle input:checked + .toggle-slider::after { transform: translateX(16px); }
+
+.hypo-inputs { display: none; }
+.hypo-inputs.visible { display: block; }
+.input-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #9ca3af; margin-bottom: 6px; }
+.input-row span { flex: 1; }
+.input-row input[type=text] { flex: 2; font-size: 12px; padding: 4px 7px; }
+.input-row input[type=number] { width: 58px; font-size: 12px; padding: 4px 7px; }
+
+/* ── Main Content ── */
+.content {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px 40px;
+}
+
+.content-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.content-title { font-size: 16px; font-weight: 700; }
+.content-sub { font-size: 12px; color: #6b7280; margin-top: 2px; }
+
+/* ── Grid ── */
+.theatre-grid { display: flex; flex-direction: column; gap: 4px; min-width: 600px; }
+
+.t-row { display: flex; align-items: center; gap: 8px; height: 34px; }
+.t-label { width: 82px; font-size: 12px; color: #6b7280; text-align: right; flex-shrink: 0; }
+.t-label strong { color: #9ca3af; font-weight: 600; }
+
+.screen-bar { display: flex; gap: 3px; align-items: center; }
+
+.s-block {
+  width: 30px;
+  height: 30px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 800;
+  cursor: default;
+  flex-shrink: 0;
+  color: rgba(255,255,255,0.9);
+  text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  letter-spacing: 0.02em;
+  position: relative;
+  transition: transform 0.1s;
+  user-select: none;
+}
+.s-block:hover { transform: scale(1.15); z-index: 10; }
+
+.s-block.available {
+  background: transparent !important;
+  border: 1.5px dashed #374151;
+  color: #4b5563;
+}
+.s-block.angel-block {
+  box-shadow: 0 0 0 2px #fbbf24, 0 0 12px rgba(251,191,36,0.35);
+}
+
+.avail-label {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.avail-green { color: #6ee7b7; }
+.avail-yellow { color: #fbbf24; }
+.avail-red { color: #f87171; }
+
+/* Size group dividers */
+.t-row.group-divider .t-label { padding-top: 8px; }
+.group-gap { height: 8px; }
+
+/* ── Summary Table ── */
+.summary-wrap {
+  margin-top: 28px;
+  background: #1a2035;
+  border: 1px solid #2d3748;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.summary-wrap h3 {
+  padding: 12px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #f97316;
+  border-bottom: 1px solid #2d3748;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+thead th {
+  padding: 8px 14px;
+  text-align: left;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #6b7280;
+  font-weight: 700;
+  background: #151f30;
+}
+tbody td { padding: 8px 14px; border-top: 1px solid #1f2937; }
+tbody tr:hover td { background: #1f2a3c; }
+.rec-strong { color: #6ee7b7; }
+.rec-tight { color: #fbbf24; }
+.rec-full { color: #f87171; }
+
+/* ── Tooltip ── */
+#tooltip {
+  position: fixed; pointer-events: none; z-index: 999;
+  background: #1f2937; border: 1px solid #374151; border-radius: 6px;
+  padding: 7px 10px; font-size: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.5);
+  display: none; white-space: nowrap; max-width: 220px;
+}
+#tooltip .tt-title { font-weight: 700; color: #f1f5f9; }
+#tooltip .tt-meta { color: #9ca3af; margin-top: 2px; }
+
+/* ── Modal ── */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+  z-index: 200; display: none; align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: #1a2035; border: 1px solid #2d3748; border-radius: 12px;
+  padding: 22px; width: 620px; max-width: 95vw; max-height: 85vh;
+  display: flex; flex-direction: column; gap: 14px; box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+}
+.modal h2 { font-size: 17px; font-weight: 700; }
+.modal-hint { font-size: 12px; color: #9ca3af; line-height: 1.6; }
+.modal-hint code { background: #111827; padding: 1px 4px; border-radius: 3px; color: #e2e8f0; font-size: 11px; }
+.modal textarea {
+  width: 100%; height: 260px; resize: vertical;
+  background: #111827; border: 1px solid #374151; border-radius: 6px;
+  color: #f1f5f9; font-family: 'Courier New', monospace; font-size: 12px; padding: 10px;
+}
+.modal-footer { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<div class="header">
+  <h1>🎬 Slate Fit Tool</h1>
+  <div class="controls">
+    <label>Weekend:</label>
+    <select id="weekendPicker" style="min-width:160px;"></select>
+    <label style="margin-left:8px;">View mode:</label>
+    <select id="viewMode">
+      <option value="all">All theatre sizes (1–28)</option>
+      <option value="small">Small (1–6)</option>
+      <option value="mid">Mid (7–14)</option>
+      <option value="large">Large (15–28)</option>
+    </select>
+    <button class="ghost" onclick="openModal()">✏ Edit Slate</button>
+    <button class="ghost" onclick="triggerFileImport()">📥 Import CSV</button>
+  </div>
+</div>
+
+<!-- ── MAIN LAYOUT ── -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-block">
+      <h3>Films in Release</h3>
+      <div id="filmLegend"><span style="font-size:12px;color:#6b7280;">Select a weekend to see films</span></div>
+    </div>
+
+    <div class="sidebar-block">
+      <h3>Hypothetical Angel Film</h3>
+      <div class="toggle-row">
+        <label class="toggle">
+          <input type="checkbox" id="hypoToggle" onchange="onHypoToggle()">
+          <span class="toggle-slider"></span>
+        </label>
+        <span style="font-size:13px;">Show on grid</span>
+      </div>
+      <div class="hypo-inputs" id="hypoInputs">
+        <div class="input-row"><span>Title</span>
+          <input type="text" id="hypoTitle" value="Angel Film" oninput="render()">
+        </div>
+        <div class="input-row"><span>Screens at 16-plex (opening wknd)</span>
+          <input type="number" id="hypoPeak16" value="2" min="1" max="10" oninput="render()">
+        </div>
+        <div class="input-row"><span>Week # (1 = opening)</span>
+          <input type="number" id="hypoWeek" value="1" min="1" max="16" oninput="render()">
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-block" style="flex:1;">
+      <h3>How to Use</h3>
+      <p style="font-size:12px;color:#6b7280;line-height:1.65;">
+        Each colored block = 1 screen. Gold-outlined blocks = Angel films.
+        Dashed blocks = available screens.<br><br>
+        <strong style="color:#9ca3af;">Peak16</strong> = how many screens a film gets at a standard 16-plex on opening weekend.
+        The tool scales this to every theatre size and applies a weekly decay curve.<br><br>
+        Click <strong style="color:#9ca3af;">Edit Slate</strong> or <strong style="color:#9ca3af;">Import CSV</strong> to load your master list.
+      </p>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content" id="mainContent">
+    <div class="content-header">
+      <div>
+        <div class="content-title" id="gridTitle">Select a weekend above</div>
+        <div class="content-sub" id="gridSub"></div>
+      </div>
+    </div>
+    <div class="theatre-grid" id="theatreGrid"></div>
+    <div id="summarySection" style="display:none;">
+      <div class="summary-wrap" style="min-width:500px;">
+        <h3>Available Screens for Angel Film — Summary by Theatre Size</h3>
+        <table>
+          <thead><tr>
+            <th>Theatre Size</th>
+            <th>Competing Screens</th>
+            <th>Angel Screens</th>
+            <th>Available</th>
+            <th>Fit Assessment</th>
+          </tr></thead>
+          <tbody id="summaryBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── TOOLTIP ── -->
+<div id="tooltip">
+  <div class="tt-title" id="ttTitle"></div>
+  <div class="tt-meta" id="ttMeta"></div>
+</div>
+
+<!-- ── MODAL ── -->
+<div class="modal-overlay" id="modalOverlay" onclick="onOverlayClick(event)">
+  <div class="modal">
+    <h2>Edit Slate</h2>
+    <div class="modal-hint">
+      CSV columns: <code>Title</code>, <code>Studio</code>, <code>ReleaseDate</code> (YYYY-MM-DD),
+      <code>Peak16</code> (screens at a 16-plex opening weekend), <code>RunWeeks</code>, <code>Type</code> (wide / limited / angel).<br>
+      Angel films are highlighted in gold and tracked separately. Competing films use the decay model automatically.
+    </div>
+    <textarea id="slateCSV"></textarea>
+    <div class="modal-footer">
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" onclick="importCSV()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Hidden file input ── -->
+<input type="file" id="fileInput" accept=".csv,.txt" style="display:none" onchange="onFileSelect(event)">
+
+<script>
+// ═══════════════════════════════════════════════════════
+// SLATE  —  replace via "Edit Slate" / "Import CSV"
+// Peak16 = screens this film gets at a 16-screen multiplex on opening weekend
+// ═══════════════════════════════════════════════════════
+let SLATE = [
+  { title: "A Minecraft Movie",        studio: "WB",             release: "2025-04-04", peak16: 5,  runWeeks: 12, type: "wide"    },
+  { title: "A Working Man",            studio: "Amazon MGM",     release: "2025-04-04", peak16: 2,  runWeeks: 6,  type: "wide"    },
+  { title: "The Accountant 2",         studio: "Amazon MGM",     release: "2025-04-25", peak16: 3,  runWeeks: 8,  type: "wide"    },
+  { title: "Final Destination: Bloodlines", studio: "WB",        release: "2025-05-16", peak16: 4,  runWeeks: 8,  type: "wide"    },
+  { title: "Mission: Impossible 8",    studio: "Paramount",      release: "2025-05-23", peak16: 5,  runWeeks: 10, type: "wide"    },
+  { title: "Lilo & Stitch",            studio: "Disney",         release: "2025-05-23", peak16: 4,  runWeeks: 10, type: "wide"    },
+  { title: "Karate Kid: Legends",      studio: "Sony",           release: "2025-05-30", peak16: 3,  runWeeks: 7,  type: "wide"    },
+  { title: "How to Train Your Dragon", studio: "Universal/DWA",  release: "2025-06-06", peak16: 5,  runWeeks: 10, type: "wide"    },
+  { title: "28 Years Later",           studio: "Sony",           release: "2025-06-20", peak16: 3,  runWeeks: 7,  type: "wide"    },
+  { title: "F1",                       studio: "Apple/WB",       release: "2025-06-27", peak16: 4,  runWeeks: 9,  type: "wide"    },
+  { title: "Jurassic World Rebirth",   studio: "Universal",      release: "2025-07-03", peak16: 5,  runWeeks: 10, type: "wide"    },
+  { title: "Superman",                 studio: "WB/DC",          release: "2025-07-11", peak16: 6,  runWeeks: 12, type: "wide"    },
+  { title: "Fantastic Four: FOTP",     studio: "Marvel/Disney",  release: "2025-07-25", peak16: 6,  runWeeks: 12, type: "wide"    },
+  { title: "The Smurfs Movie",         studio: "Paramount",      release: "2025-07-18", peak16: 3,  runWeeks: 8,  type: "wide"    },
+  { title: "Angel Film (Sample)",      studio: "Angel Studios",  release: "2025-08-01", peak16: 2,  runWeeks: 8,  type: "angel"   },
+  { title: "Avengers: Doomsday",       studio: "Marvel/Disney",  release: "2026-05-01", peak16: 7,  runWeeks: 14, type: "wide"    },
+];
+
+// ═══════════════════════════════════════════════════════
+// COLOR PALETTE
+// ═══════════════════════════════════════════════════════
+const PALETTE = [
+  "#e74c3c","#3b82f6","#22c55e","#a855f7","#f59e0b",
+  "#06b6d4","#ec4899","#84cc16","#f97316","#64748b",
+  "#ef4444","#6366f1","#14b8a6","#fb923c","#8b5cf6",
+  "#10b981","#e879f9","#facc15","#38bdf8","#4ade80",
+];
+const ANGEL_COLOR  = "#f59e0b";
+const AVAIL_COLOR  = "#374151";
+
+// ═══════════════════════════════════════════════════════
+// DECAY CURVE  (week 1 → week 12)
+// ═══════════════════════════════════════════════════════
+const DECAY = [1.00, 0.72, 0.52, 0.38, 0.27, 0.19, 0.13, 0.09, 0.06, 0.04, 0.03, 0.02];
+
+// ═══════════════════════════════════════════════════════
+// WEEKEND PICKER
+// ═══════════════════════════════════════════════════════
+function buildWeekendOptions() {
+  const sel = document.getElementById('weekendPicker');
+  sel.innerHTML = '';
+  const today = new Date();
+  // Find most-recent Friday (today if Friday)
+  const dow = today.getDay(); // 0=Sun
+  const daysBack = dow >= 5 ? dow - 5 : dow + 2; // days since last Friday
+  const start = new Date(today);
+  start.setDate(today.getDate() - daysBack - 8 * 7); // 8 weeks back
+
+  let selected = null;
+  for (let i = 0; i < 60; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i * 7);
+    const iso = toISO(d);
+    const opt = document.createElement('option');
+    opt.value = iso;
+    opt.textContent = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    sel.appendChild(opt);
+    if (!selected && iso >= toISO(today)) selected = opt;
+  }
+  if (selected) sel.value = selected.value;
+  sel.addEventListener('change', render);
+}
+
+function toISO(d) {
+  return d.toISOString().split('T')[0];
+}
+
+function parseDateLocal(iso) {
+  const [y,m,d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+// ═══════════════════════════════════════════════════════
+// SCREEN ALLOCATION
+// ═══════════════════════════════════════════════════════
+function weeksOut(releaseISO, weekendISO) {
+  const r = parseDateLocal(releaseISO);
+  const w = parseDateLocal(weekendISO);
+  const diff = Math.round((w - r) / (7 * 86400 * 1000));
+  return diff + 1; // opening Friday = week 1
+}
+
+function screensFor(film, theatreSize, weekISO) {
+  const wk = weeksOut(film.release, weekISO);
+  if (wk < 1 || wk > film.runWeeks) return 0;
+  const decay = DECAY[Math.min(wk - 1, DECAY.length - 1)];
+  const raw = film.peak16 * (theatreSize / 16) * decay;
+  // Wide/angel: guarantee ≥1 at larger theatres if at least half a screen
+  if ((film.type === 'wide' || film.type === 'angel') && raw >= 0.45 && theatreSize >= 4) {
+    return Math.max(1, Math.round(raw));
+  }
+  return raw >= 0.5 ? Math.round(raw) : 0;
+}
+
+// Fit blocks into exact theatre size via proportional trim
+function fitToSize(blocks, total, maxSize) {
+  if (total <= maxSize) return;
+  const scale = maxSize / total;
+  blocks.forEach(b => { b.count = Math.max(1, Math.round(b.count * scale)); });
+  let newTotal = blocks.reduce((s, b) => s + b.count, 0);
+  // Trim largest first until we're at maxSize
+  while (newTotal > maxSize) {
+    blocks.sort((a, b) => b.count - a.count);
+    blocks[0].count--;
+    if (blocks[0].count === 0) blocks.shift();
+    newTotal--;
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// COLOR ASSIGNMENT
+// ═══════════════════════════════════════════════════════
+let filmColorMap = {};
+function assignColors() {
+  filmColorMap = {};
+  let ci = 0;
+  SLATE.forEach(f => {
+    filmColorMap[f.title] = f.type === 'angel' ? ANGEL_COLOR : PALETTE[ci++ % PALETTE.length];
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// ABBREVIATION
+// ═══════════════════════════════════════════════════════
+const SKIP_WORDS = new Set(['a','an','the','of','and','in','to','&','vs','by',':','-']);
+function abbrev(title) {
+  const words = title.replace(/[^\w\s]/g, '').split(/\s+/)
+    .filter(w => w.length > 1 && !SKIP_WORDS.has(w.toLowerCase()));
+  if (words.length === 0) return title.substring(0, 2).toUpperCase();
+  if (words.length === 1) return words[0].substring(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+// ═══════════════════════════════════════════════════════
+// MAIN RENDER
+// ═══════════════════════════════════════════════════════
+function render() {
+  const weekISO = document.getElementById('weekendPicker').value;
+  if (!weekISO) return;
+
+  assignColors();
+
+  const viewMode = document.getElementById('viewMode').value;
+  const showHypo = document.getElementById('hypoToggle').checked;
+  const hypoTitle = document.getElementById('hypoTitle').value.trim() || 'Angel Film';
+  const hypoPeak16 = Math.max(1, parseInt(document.getElementById('hypoPeak16').value) || 2);
+  const hypoWeekNum = Math.max(1, parseInt(document.getElementById('hypoWeek').value) || 1);
+
+  // Active films this weekend
+  const active = SLATE.filter(f => {
+    const wk = weeksOut(f.release, weekISO);
+    return wk >= 1 && wk <= f.runWeeks;
+  });
+  const competing = active.filter(f => f.type !== 'angel');
+  const angelFilms = active.filter(f => f.type === 'angel');
+
+  // Update sidebar legend
+  const legend = document.getElementById('filmLegend');
+  legend.innerHTML = '';
+  if (active.length === 0) {
+    legend.innerHTML = '<span style="font-size:12px;color:#6b7280;">No films active this weekend</span>';
+  } else {
+    active.forEach(f => {
+      const wk = weeksOut(f.release, weekISO);
+      const div = document.createElement('div');
+      div.className = 'film-row' + (f.type === 'angel' ? ' is-angel' : '');
+      div.innerHTML = `
+        <div class="film-dot" style="background:${filmColorMap[f.title]}"></div>
+        <div class="film-row-info">
+          <div class="film-row-title">${f.title}${f.type === 'angel' ? '<span class="badge badge-angel">Angel</span>' : ''}</div>
+          <div class="film-row-meta">${f.studio} · Wk ${wk} · P16=${f.peak16}</div>
+        </div>`;
+      legend.appendChild(div);
+    });
+  }
+  if (showHypo) {
+    const div = document.createElement('div');
+    div.className = 'film-row is-angel';
+    div.innerHTML = `
+      <div class="film-dot" style="background:#fbbf24;border:2px solid #fff;width:10px;height:10px;"></div>
+      <div class="film-row-info">
+        <div class="film-row-title">${hypoTitle}<span class="badge badge-hypo">Hypo</span></div>
+        <div class="film-row-meta">Wk ${hypoWeekNum} · P16=${hypoPeak16}</div>
+      </div>`;
+    legend.appendChild(div);
+  }
+
+  // Grid title
+  const d = parseDateLocal(weekISO);
+  document.getElementById('gridTitle').textContent =
+    `Weekend of ${d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
+  document.getElementById('gridSub').textContent =
+    `${active.length} film${active.length !== 1 ? 's' : ''} in release · ${competing.length} competing · ${angelFilms.length} Angel`;
+
+  // Determine size range
+  let lo = 1, hi = 28;
+  if (viewMode === 'small') { lo = 1; hi = 6; }
+  else if (viewMode === 'mid') { lo = 7; hi = 14; }
+  else if (viewMode === 'large') { lo = 15; hi = 28; }
+
+  const grid = document.getElementById('theatreGrid');
+  grid.innerHTML = '';
+
+  const summaryData = [];
+
+  for (let size = hi; size >= lo; size--) {
+    // --- Competing films ---
+    const compBlocks = [];
+    competing.forEach(f => {
+      const c = screensFor(f, size, weekISO);
+      if (c > 0) compBlocks.push({ film: f, count: c });
+    });
+    let compTotal = compBlocks.reduce((s, b) => s + b.count, 0);
+
+    // Cap competing to leave at least some room (don't exceed 90% of house)
+    const compCap = Math.floor(size * 0.90);
+    if (compTotal > compCap) {
+      fitToSize(compBlocks, compTotal, compCap);
+      compTotal = compBlocks.reduce((s, b) => s + b.count, 0);
+    }
+
+    // --- Angel films from slate ---
+    const angelBlocks = [];
+    let angelTotal = 0;
+    let remaining = size - compTotal;
+    angelFilms.forEach(f => {
+      let c = screensFor(f, size, weekISO);
+      c = Math.min(c, remaining - angelTotal);
+      if (c > 0) {
+        angelBlocks.push({ film: f, count: c, isAngel: true });
+        angelTotal += c;
+      }
+    });
+
+    // --- Hypothetical ---
+    let hypoTotal = 0;
+    if (showHypo) {
+      const hypoFake = { release: weekISO, peak16: hypoPeak16, runWeeks: 20, type: 'angel' };
+      // Simulate a specific week: back-calculate what release date gives week hypoWeekNum
+      const offset = (hypoWeekNum - 1) * 7;
+      const fakeRelease = new Date(parseDateLocal(weekISO));
+      fakeRelease.setDate(fakeRelease.getDate() - offset);
+      hypoFake.release = toISO(fakeRelease);
+
+      let c = screensFor(hypoFake, size, weekISO);
+      c = Math.min(c, size - compTotal - angelTotal);
+      if (c > 0) {
+        angelBlocks.push({
+          film: { title: hypoTitle, studio: `Wk ${hypoWeekNum} · P16=${hypoPeak16}` },
+          count: c, isAngel: true, isHypo: true,
+        });
+        hypoTotal = c;
+        angelTotal += c;
+      }
+    }
+
+    const usedTotal = compTotal + angelTotal;
+    const available = Math.max(0, size - usedTotal);
+
+    // --- Build DOM row ---
+    const row = document.createElement('div');
+    row.className = 't-row';
+
+    const lbl = document.createElement('div');
+    lbl.className = 't-label';
+    lbl.innerHTML = `<strong>${size}</strong><span style="font-size:10px;"> screen${size !== 1 ? 's' : ''}</span>`;
+    row.appendChild(lbl);
+
+    const bar = document.createElement('div');
+    bar.className = 'screen-bar';
+
+    const renderBlocks = (blocks, isAngel) => {
+      blocks.forEach(fb => {
+        const color = fb.isHypo ? '#fbbf24' : (isAngel || fb.isAngel ? ANGEL_COLOR : filmColorMap[fb.film.title]);
+        for (let i = 0; i < fb.count; i++) {
+          const b = document.createElement('div');
+          b.className = 's-block' + ((isAngel || fb.isAngel) ? ' angel-block' : '');
+          b.style.background = color;
+          b.setAttribute('data-title', fb.film.title);
+          b.setAttribute('data-meta', fb.film.studio || '');
+          b.textContent = abbrev(fb.film.title);
+          b.addEventListener('mouseenter', showTip);
+          b.addEventListener('mousemove', moveTip);
+          b.addEventListener('mouseleave', hideTip);
+          bar.appendChild(b);
+        }
+      });
+    };
+
+    renderBlocks(compBlocks, false);
+    renderBlocks(angelBlocks, true);
+
+    // Available blocks
+    for (let i = 0; i < available; i++) {
+      const b = document.createElement('div');
+      b.className = 's-block available';
+      b.setAttribute('data-title', 'Available');
+      b.setAttribute('data-meta', 'No film assigned');
+      b.textContent = '+';
+      b.addEventListener('mouseenter', showTip);
+      b.addEventListener('mousemove', moveTip);
+      b.addEventListener('mouseleave', hideTip);
+      bar.appendChild(b);
+    }
+
+    // Available label
+    const avLbl = document.createElement('div');
+    const avClass = available === 0 ? 'avail-red' : available <= 1 ? 'avail-yellow' : 'avail-green';
+    avLbl.className = `avail-label ${avClass}`;
+    avLbl.textContent = available === 0 ? '0 avail' : `+${available}`;
+    bar.appendChild(avLbl);
+
+    row.appendChild(bar);
+    grid.appendChild(row);
+
+    // Small gap every 5 rows
+    if ((size - lo) % 5 === 4 && size > lo) {
+      grid.appendChild(Object.assign(document.createElement('div'), { className: 'group-gap' }));
+    }
+
+    summaryData.push({ size, compTotal, angelTotal: angelTotal - hypoTotal, hypoTotal, available });
+  }
+
+  // --- Summary table ---
+  const sec = document.getElementById('summarySection');
+  const tbody = document.getElementById('summaryBody');
+  sec.style.display = 'block';
+  tbody.innerHTML = '';
+
+  // Group sizes for summary
+  const GROUPS = [[1,2],[3,4],[5,6],[7,9],[10,12],[13,16],[17,20],[21,24],[25,28]];
+  GROUPS.forEach(([a, b]) => {
+    const rows = summaryData.filter(r => r.size >= a && r.size <= b);
+    if (rows.length === 0) return;
+    const avg = arr => Math.round(arr.reduce((s, r) => s + r, 0) / arr.length);
+    const avgComp  = avg(rows.map(r => r.compTotal));
+    const avgAngel = avg(rows.map(r => r.angelTotal));
+    const avgHypo  = avg(rows.map(r => r.hypoTotal));
+    const avgAvail = avg(rows.map(r => r.available));
+    const label    = a === b ? `${a}` : `${a}–${b}`;
+
+    let rec = '', cls = '';
+    if (avgAvail === 0) { rec = 'Full — negotiate'; cls = 'rec-full'; }
+    else if (avgAvail >= 3) { rec = '✓ Strong fit'; cls = 'rec-strong'; }
+    else if (avgAvail >= 1) { rec = '~ Tight fit'; cls = 'rec-tight'; }
+    else { rec = '—'; }
+
+    const hypoCell = showHypo ? `<td>${avgHypo > 0 ? avgHypo : '—'}</td>` : '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${label}</strong> screens</td>
+      <td>${avgComp}</td>
+      <td>${avgAngel > 0 ? avgAngel : '—'}</td>
+      <td class="${avgAvail === 0 ? 'rec-full' : avgAvail >= 3 ? 'rec-strong' : 'rec-tight'}">${avgAvail}</td>
+      <td class="${cls}">${rec}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// TOOLTIP
+// ═══════════════════════════════════════════════════════
+let tipTarget = null;
+function showTip(e) {
+  tipTarget = e.currentTarget;
+  document.getElementById('ttTitle').textContent = e.currentTarget.getAttribute('data-title');
+  document.getElementById('ttMeta').textContent  = e.currentTarget.getAttribute('data-meta');
+  document.getElementById('tooltip').style.display = 'block';
+  moveTip(e);
+}
+function moveTip(e) {
+  const t = document.getElementById('tooltip');
+  t.style.left = (e.clientX + 14) + 'px';
+  t.style.top  = (e.clientY - 10) + 'px';
+}
+function hideTip() {
+  document.getElementById('tooltip').style.display = 'none';
+}
+
+// ═══════════════════════════════════════════════════════
+// HYPO TOGGLE
+// ═══════════════════════════════════════════════════════
+function onHypoToggle() {
+  document.getElementById('hypoInputs').classList.toggle(
+    'visible', document.getElementById('hypoToggle').checked
+  );
+  render();
+}
+
+// ═══════════════════════════════════════════════════════
+// MODAL / CSV IMPORT
+// ═══════════════════════════════════════════════════════
+function openModal() {
+  const lines = ['Title,Studio,ReleaseDate,Peak16,RunWeeks,Type'];
+  SLATE.forEach(f => {
+    lines.push(`"${f.title}","${f.studio}",${f.release},${f.peak16},${f.runWeeks},${f.type}`);
+  });
+  document.getElementById('slateCSV').value = lines.join('\n');
+  document.getElementById('modalOverlay').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('open');
+}
+function onOverlayClick(e) {
+  if (e.target === document.getElementById('modalOverlay')) closeModal();
+}
+
+function importCSV() {
+  const raw = document.getElementById('slateCSV').value.trim();
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) { alert('Need a header row + at least one film.'); return; }
+
+  const header = parseRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g,''));
+  const idx = {};
+  header.forEach((h, i) => idx[h] = i);
+
+  if (!('title' in idx && 'releasedate' in idx && 'peak16' in idx)) {
+    alert('Missing required columns: Title, ReleaseDate, Peak16');
+    return;
+  }
+
+  const newSlate = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseRow(lines[i]);
+    const get = (key, def) => idx[key] !== undefined ? (cols[idx[key]] || def) : def;
+    const title = get('title', '').trim();
+    if (!title) continue;
+    newSlate.push({
+      title,
+      studio:   get('studio', '').trim(),
+      release:  get('releasedate', '').trim(),
+      peak16:   Math.max(1, parseInt(get('peak16', '2')) || 2),
+      runWeeks: Math.max(1, parseInt(get('runweeks', '8')) || 8),
+      type:     (get('type', 'wide').trim().toLowerCase() || 'wide'),
+    });
+  }
+  if (!newSlate.length) { alert('No valid films found.'); return; }
+  SLATE = newSlate;
+  closeModal();
+  render();
+}
+
+function parseRow(line) {
+  const out = []; let cur = ''; let inQ = false;
+  for (const ch of line) {
+    if (ch === '"') { inQ = !inQ; }
+    else if (ch === ',' && !inQ) { out.push(cur.trim()); cur = ''; }
+    else { cur += ch; }
+  }
+  out.push(cur.trim());
+  return out;
+}
+
+function triggerFileImport() {
+  document.getElementById('fileInput').click();
+}
+function onFileSelect(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById('slateCSV').value = ev.target.result;
+    document.getElementById('modalOverlay').classList.add('open');
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+}
+
+// View mode change
+document.getElementById('viewMode').addEventListener('change', render);
+
+// ═══════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════
+buildWeekendOptions();
+render();
+</script>
+</body>
+</html>

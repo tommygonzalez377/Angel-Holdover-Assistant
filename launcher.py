@@ -49,17 +49,27 @@ except Exception as _e:
 PORT       = int(os.getenv('PORT', '8766'))
 BASE_DIR   = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
+STATIC_DIR = BASE_DIR / "static"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Asset paths — configurable via .env, fall back to assets/ folder next to launcher
 _ASSETS_DIR = BASE_DIR / "assets"
 VIDEO_PATH  = Path(os.getenv('VIDEO_PATH',  str(_ASSETS_DIR / 'bg_video.mp4')))
-LOGO_PATH   = Path(os.getenv('LOGO_PATH',   str(_ASSETS_DIR / 'logo.eps')))
+LOGO_PATH   = Path(os.getenv('LOGO_PATH',   str(_ASSETS_DIR / 'logo.png')))
 
 def _load_logo_b64() -> str:
-    """Convert EPS logo → base64 PNG. Tries Ghostscript (alpha), then Pillow."""
+    """Return the logo as a base64 PNG. Raster logos (.png/.jpg) are embedded
+    directly; EPS logos are rasterized via Ghostscript (alpha), then Pillow."""
     if not LOGO_PATH.exists():
         return ''
+    # Raster logo: embed the bytes directly — no conversion needed (the Pillow
+    # path below uses EPS-only load(scale=...), which fails on a real PNG).
+    if LOGO_PATH.suffix.lower() in ('.png', '.jpg', '.jpeg'):
+        try:
+            return base64.standard_b64encode(LOGO_PATH.read_bytes()).decode()
+        except Exception as e:
+            print(f'  Logo: could not read {LOGO_PATH.name} — {e}')
+            return ''
     import tempfile, io
     # Ghostscript: pngalpha gives white paths on transparent background
     for gs_cmd in ('gswin64c', 'gswin32c', 'gs'):
@@ -102,6 +112,7 @@ _LOGO_FOOTER_IMG = (f'<img id="footer-logo" src="data:image/png;base64,{_LOGO_B6
 
 _job_queues:   dict[str, queue.Queue] = {}
 _job_results:  dict[str, str]         = {}   # job_id → 'success' | 'error: ...'
+_job_logs:     dict[str, list]        = {}   # job_id → list of log line strings (survives SSE drops)
 _job_unbooked:        dict[str, list] = {}   # job_id → list of {venue, city, state, screens}
 _job_already_booked:  dict[str, list] = {}   # job_id → Agreed in Mica but not on booking sheet
 _job_missed:          dict[str, list] = {}   # job_id → on sheet but not found in Mica
@@ -110,6 +121,12 @@ _comscore_lock = threading.Lock()             # only one Comscore scrape at a ti
 # ---------------------------------------------------------------------------
 # HTML page
 # ---------------------------------------------------------------------------
+
+try:
+    import booking_coverage as _bc
+except Exception as _bc_err:  # snowflake pkg missing etc. — keep the rest of the app working
+    _bc = None
+    print(f"[booking_coverage] unavailable: {_bc_err}", flush=True)
 
 HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -327,6 +344,11 @@ HTML = r"""<!DOCTYPE html>
     line-height: 1.4;
   }
 
+  /* Sheet Updates tab: steps flow vertically (no JS positioning here, so the
+     absolute layout would stack them at top:0 and overlap their labels). */
+  #tab-sheets .step { position: static; margin-bottom: 80px; }
+  #tab-sheets #booking-step-line { display: none; }
+
   /* ── Right content column ─────────────────────────────────────────────── */
   #main-col { flex: 1; min-width: 0; }
 
@@ -513,7 +535,7 @@ HTML = r"""<!DOCTYPE html>
   <h1>Angel Studios</h1>
   <div id="user-nav" style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;">
     <span id="user-email" style="color:#aaa;"></span>
-    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">5/7 Deploy 10:30 AM</span>
+    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#aaa;font-size:13px;font-weight:bold;">6/17/26 12:31 PM</span>
     <a href="/aliases" style="color:#aaa;text-decoration:none;font-size:12px;">Venue Aliases</a>
     <a id="profile-link" href="/auth/profile" style="color:#00bcd4;text-decoration:none;display:none;">My Profile</a>
     <a id="logout-link" href="/auth/logout" style="color:#888;text-decoration:none;display:none;">Sign Out</a>
@@ -543,6 +565,10 @@ HTML = r"""<!DOCTYPE html>
   <button class="tab-btn active" onclick="switchTab('holdover')">Angel Holdover Assistant</button>
   <button class="tab-btn"        onclick="switchTab('booking')">Angel Booking Assistant</button>
   <button class="tab-btn"        onclick="switchTab('mass')">Angel Mass Booking</button>
+  <button class="tab-btn"        onclick="switchTab('sheets')">Angel Sheet Updates</button>
+  <button class="tab-btn"        onclick="switchTab('coverage')">Booking Coverage</button>
+  <button class="tab-btn"        onclick="switchTab('predictor')">Theater Booking Predictor</button>
+  <button class="tab-btn"        onclick="switchTab('boxoffice')">Box Office Estimator</button>
 </div>
 
 <div id="tab-holdover" class="tab-panel active">
@@ -652,6 +678,7 @@ HTML = r"""<!DOCTYPE html>
         <input id="booking-contact" class="booking-field" placeholder="Filter value" style="flex:1;margin:0;">
       </div>
       <input id="booking-title"   class="booking-field" placeholder="Title (e.g. Solo Mio)">
+      <input id="booking-plan-desc" class="booking-field" placeholder="Plan description (default: US, CA, PR)" style="margin-top:6px;">
 
       <div id="booking-mode-toggle">
         <button class="mode-btn active" id="bmode-demo" onclick="setBookingMode('demo')">Demo</button>
@@ -754,6 +781,207 @@ HTML = r"""<!DOCTYPE html>
   </main>
 </div><!-- end #tab-mass -->
 
+<div id="tab-sheets" class="tab-panel">
+  <main id="booking-main">
+    <div id="booking-steps-panel">
+      <div id="booking-step-line"></div>
+      <div class="step" id="sstep1">
+        <div class="step-num">1</div>
+        <div class="step-label">Pick Sheet to Update</div>
+      </div>
+      <div class="step" id="sstep2">
+        <div class="step-num">2</div>
+        <div class="step-label">Dry run will not update sheet, only pull numbers</div>
+      </div>
+    </div>
+
+    <div id="booking-main-col">
+      <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:14px; padding:20px 22px; margin-bottom:18px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <div style="font-size:1.05rem; font-weight:700; color:#fff;">O Canada — Weekly Update</div>
+          <div id="ocanada-next-run" style="font-size:0.78rem; color:#888;">Next scheduled: —</div>
+        </div>
+        <p style="color:rgba(255,255,255,0.65); font-size:0.85rem; line-height:1.5; margin-bottom:14px;">
+          Pulls Canadian weekly grosses for every active Angel title from Comscore and writes location count + week gross to the
+          <a href="https://docs.google.com/spreadsheets/d/1E5H7pP-YFZmGQqcGoWN4aNeNBhdVRGKyATVh90AOsUw/edit"
+             target="_blank" style="color:#00c9d4; text-decoration:none;">O Canada Google Sheet</a>.
+          Runs automatically every Friday at 9:00&nbsp;AM&nbsp;Mountain (your local clock). Use Run Now if you need to re-run or test.
+        </p>
+
+        <label style="display:flex; align-items:center; gap:8px; color:rgba(255,255,255,0.75); font-size:0.85rem; cursor:pointer; margin-bottom:12px;">
+          <input type="checkbox" id="ocanada-dry-run" style="width:16px; height:16px; cursor:pointer;">
+          Dry Run — read Comscore + preview values, but don't write to the sheet
+        </label>
+
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button id="ocanada-run-btn" onclick="runOCanadaUpdate()"
+                  style="background:#00c9d4; color:#0a0a1a; border:none; padding:11px 22px; border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer;">
+            Run O Canada Now ▶
+          </button>
+          <button id="ocanada-reset-btn" onclick="resetOCanadaUI()" style="display:none; background:rgba(255,255,255,0.08); color:#ccc; border:1px solid rgba(255,255,255,0.18); padding:11px 18px; border-radius:8px; cursor:pointer;">
+            Run Again
+          </button>
+        </div>
+      </div>
+
+      <div id="ocanada-progress" style="display:none; max-height:520px; overflow-y:auto; background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.1); border-radius:10px; padding:14px 16px; font-family:Consolas,'Courier New',monospace; font-size:0.82rem; line-height:1.5; color:#ccc; white-space:pre-wrap; word-break:break-word;"></div>
+
+      <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:14px; padding:20px 22px; margin-top:18px; margin-bottom:18px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <div style="font-size:1.05rem; font-weight:700; color:#fff;">Daily Grosses — Weekend Drops</div>
+          <div id="dailygrosses-next-run" style="font-size:0.78rem; color:#888;">Next scheduled: —</div>
+        </div>
+        <p style="color:rgba(255,255,255,0.65); font-size:0.85rem; line-height:1.5; margin-bottom:14px;">
+          Pulls Friday/Saturday/Sunday US grosses for every active Angel film from Comscore and writes them to the
+          <a href="https://docs.google.com/spreadsheets/d/1yTnuoNh923ibhQNA1tTrwfltF339oXXvPMDe3CHE1vE/edit"
+             target="_blank" style="color:#00c9d4; text-decoration:none;">Weekend Percentage Drop Box Office Sheet</a>
+          (Fri-Sat and NON SOF tabs). Runs automatically every Tuesday at 9:00&nbsp;AM&nbsp;Mountain (your local clock). Use Run Now to re-run or test.
+        </p>
+
+        <label style="display:flex; align-items:center; gap:8px; color:rgba(255,255,255,0.75); font-size:0.85rem; cursor:pointer; margin-bottom:12px;">
+          <input type="checkbox" id="dailygrosses-dry-run" style="width:16px; height:16px; cursor:pointer;">
+          Dry Run — read Comscore + preview values, but don't write to the sheet
+        </label>
+
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button id="dailygrosses-run-btn" onclick="runDailyGrossesUpdate()"
+                  style="background:#00c9d4; color:#0a0a1a; border:none; padding:11px 22px; border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer;">
+            Run Daily Grosses Now ▶
+          </button>
+          <button id="dailygrosses-reset-btn" onclick="resetDailyGrossesUI()" style="display:none; background:rgba(255,255,255,0.08); color:#ccc; border:1px solid rgba(255,255,255,0.18); padding:11px 18px; border-radius:8px; cursor:pointer;">
+            Run Again
+          </button>
+        </div>
+      </div>
+
+      <div id="dailygrosses-progress" style="display:none; max-height:520px; overflow-y:auto; background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.1); border-radius:10px; padding:14px 16px; font-family:Consolas,'Courier New',monospace; font-size:0.82rem; line-height:1.5; color:#ccc; white-space:pre-wrap; word-break:break-word;"></div>
+
+      <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:14px; padding:20px 22px; margin-top:18px; margin-bottom:18px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <div style="font-size:1.05rem; font-weight:700; color:#fff;">Pre-Release Screen Count — # of Runs</div>
+          <div id="screencount-next-run" style="font-size:0.78rem; color:#888;">Next scheduled: —</div>
+        </div>
+        <p style="color:rgba(255,255,255,0.65); font-size:0.85rem; line-height:1.5; margin-bottom:14px;">
+          Pulls each upcoming Angel film's opening-week Agreed+Booked location count from MICA Plans and writes it to the week-countdown column in the
+          <a href="https://docs.google.com/spreadsheets/d/1eQRg2pcpC2B6fXhBWvwB0NCsT_5m4t3qnFQGSxLUvJM/edit"
+             target="_blank" style="color:#00c9d4; text-decoration:none;">Screen Count Google Sheet</a>.
+          Runs automatically every Wednesday (tickets-on-sale columns) and Friday (release-countdown columns) at 6:00&nbsp;PM&nbsp;Pacific. Use Run Now to re-run or test.
+        </p>
+
+        <label style="display:flex; align-items:center; gap:8px; color:rgba(255,255,255,0.75); font-size:0.85rem; cursor:pointer; margin-bottom:12px;">
+          <input type="checkbox" id="screencount-dry-run" style="width:16px; height:16px; cursor:pointer;">
+          Dry Run — read MICA + preview counts, but don't write to the sheet
+        </label>
+
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button id="screencount-run-btn" onclick="runScreenCountUpdate()"
+                  style="background:#00c9d4; color:#0a0a1a; border:none; padding:11px 22px; border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer;">
+            Run Pre-Release Screen Count ▶
+          </button>
+          <button id="screencount-reset-btn" onclick="resetScreenCountUI()" style="display:none; background:rgba(255,255,255,0.08); color:#ccc; border:1px solid rgba(255,255,255,0.18); padding:11px 18px; border-radius:8px; cursor:pointer;">
+            Run Again
+          </button>
+        </div>
+      </div>
+
+      <div id="screencount-progress" style="display:none; max-height:520px; overflow-y:auto; background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.1); border-radius:10px; padding:14px 16px; font-family:Consolas,'Courier New',monospace; font-size:0.82rem; line-height:1.5; color:#ccc; white-space:pre-wrap; word-break:break-word;"></div>
+
+      <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:14px; padding:20px 22px; margin-top:18px; margin-bottom:18px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <div style="font-size:1.05rem; font-weight:700; color:#fff;">Post-Release Screen Count — Weeks After Release</div>
+          <div id="postrelease-next-run" style="font-size:0.78rem; color:#888;">Next scheduled: —</div>
+        </div>
+        <p style="color:rgba(255,255,255,0.65); font-size:0.85rem; line-height:1.5; margin-bottom:14px;">
+          For each Angel film 1–7 weeks past release, pulls that week's playing-venue count from MICA Bookings → Playweeks (all countries, every status except Cancelled &amp; No&nbsp;show) and writes it to the matching week column on the "Weeks after release" tab of the
+          <a href="https://docs.google.com/spreadsheets/d/1eQRg2pcpC2B6fXhBWvwB0NCsT_5m4t3qnFQGSxLUvJM/edit#gid=1546234291"
+             target="_blank" style="color:#00c9d4; text-decoration:none;">Screen Count Google Sheet</a>.
+          Runs automatically every Friday at 9:00&nbsp;AM&nbsp;Mountain and overrides anything pulled early. Run Now early in the week (Tue–Thu) to get a jump on the coming Friday's week.
+        </p>
+
+        <label style="display:flex; align-items:center; gap:8px; color:rgba(255,255,255,0.75); font-size:0.85rem; cursor:pointer; margin-bottom:12px;">
+          <input type="checkbox" id="postrelease-dry-run" style="width:16px; height:16px; cursor:pointer;">
+          Dry Run — read MICA + preview counts, but don't write to the sheet
+        </label>
+
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button id="postrelease-run-btn" onclick="runPostReleaseUpdate()"
+                  style="background:#00c9d4; color:#0a0a1a; border:none; padding:11px 22px; border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer;">
+            Run Post-Release Screen Count ▶
+          </button>
+          <button id="postrelease-reset-btn" onclick="resetPostReleaseUI()" style="display:none; background:rgba(255,255,255,0.08); color:#ccc; border:1px solid rgba(255,255,255,0.18); padding:11px 18px; border-radius:8px; cursor:pointer;">
+            Run Again
+          </button>
+        </div>
+      </div>
+
+      <div id="postrelease-progress" style="display:none; max-height:520px; overflow-y:auto; background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.1); border-radius:10px; padding:14px 16px; font-family:Consolas,'Courier New',monospace; font-size:0.82rem; line-height:1.5; color:#ccc; white-space:pre-wrap; word-break:break-word;"></div>
+    </div>
+  </main>
+</div><!-- end #tab-sheets -->
+
+<div id="tab-predictor" class="tab-panel">
+  <div style="display:flex; align-items:center; justify-content:center; min-height:calc(100vh - 180px); padding:24px;">
+    <div style="background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:48px 56px; text-align:center; max-width:560px; box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+      <div style="color:#00bcd4; font-size:11px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:10px;">Angel Studios 2026 Slate</div>
+      <h2 style="color:#fff; font-size:1.7rem; font-weight:700; margin:0 0 14px;">Theater Booking Predictor</h2>
+      <p style="color:#aaa; font-size:0.95rem; line-height:1.6; margin:0 0 32px;">
+        Competition tier, real-comp picks, eligible-venue counts, and predicted box-office top 10 per opening weekend.
+      </p>
+      <a href="/theater-predictor" target="_blank" rel="noopener"
+         style="display:inline-block; padding:14px 32px; background:#00bcd4; color:#0a0a14;
+                text-decoration:none; border-radius:10px; font-weight:700; font-size:1rem;
+                letter-spacing:0.02em; box-shadow:0 4px 14px rgba(0,188,212,0.3); transition:transform 0.1s;">
+        Open Predictor &nbsp;&rarr;
+      </a>
+      <div style="color:#666; font-size:11px; margin-top:18px; line-height:1.5;">
+        Opens in a new tab. Same Twingate session — no second login.
+      </div>
+    </div>
+  </div>
+</div><!-- end #tab-predictor -->
+
+<div id="tab-boxoffice" class="tab-panel">
+  <div style="display:flex; align-items:center; justify-content:center; min-height:calc(100vh - 180px); padding:24px;">
+    <div style="background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:48px 56px; text-align:center; max-width:560px; box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+      <div style="color:#00bcd4; font-size:11px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:10px;">Weekend Projection Scorecard</div>
+      <h2 style="color:#fff; font-size:1.7rem; font-weight:700; margin:0 0 14px;">Box Office Estimator</h2>
+      <p style="color:#aaa; font-size:0.95rem; line-height:1.6; margin:0 0 32px;">
+        Our Cowork &amp; Chat opening-weekend estimates vs. Box Office Theory and Screen Dollars, scored against the actual 3-day — by weekend, with a running accuracy scorecard.
+      </p>
+      <a href="https://box-office-estimator.angelapps.io/" target="_blank" rel="noopener"
+         style="display:inline-block; padding:14px 32px; background:#00bcd4; color:#0a0a14;
+                text-decoration:none; border-radius:10px; font-weight:700; font-size:1rem;
+                letter-spacing:0.02em; box-shadow:0 4px 14px rgba(0,188,212,0.3); transition:transform 0.1s;">
+        Open Box Office Estimator &nbsp;&rarr;
+      </a>
+      <div style="color:#666; font-size:11px; margin-top:18px; line-height:1.5;">
+        Opens in a new tab. Same Twingate session — no second login.
+      </div>
+    </div>
+  </div>
+</div><!-- end #tab-boxoffice -->
+
+<div id="tab-coverage" class="tab-panel">
+  <div style="display:flex; align-items:center; justify-content:center; min-height:calc(100vh - 180px); padding:24px;">
+    <div style="background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:48px 56px; text-align:center; max-width:560px; box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+      <div style="color:#00bcd4; font-size:11px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:10px;">Committed vs. Actual Showtimes</div>
+      <h2 style="color:#fff; font-size:1.7rem; font-weight:700; margin:0 0 14px;">Booking Coverage</h2>
+      <p style="color:#aaa; font-size:0.95rem; line-height:1.6; margin:0 0 32px;">
+        Compare what exhibitors committed to in Mica against the showtimes they're actually scheduling &mdash; no-shows, under-running venues, % sold, and venue tags. Live from Snowflake, with Excel export.
+      </p>
+      <a href="/booking-coverage" target="_blank" rel="noopener"
+         style="display:inline-block; padding:14px 32px; background:#00bcd4; color:#0a0a14;
+                text-decoration:none; border-radius:10px; font-weight:700; font-size:1rem;
+                letter-spacing:0.02em; box-shadow:0 4px 14px rgba(0,188,212,0.3); transition:transform 0.1s;">
+        Open Booking Coverage &nbsp;&rarr;
+      </a>
+      <div style="color:#666; font-size:11px; margin-top:18px; line-height:1.5;">
+        Opens in a new tab. Same Twingate session — no second login.
+      </div>
+    </div>
+  </div>
+</div><!-- end #tab-coverage -->
+
 <footer id="page-footer">
   __LOGO_FOOTER__
 </footer>
@@ -767,6 +995,7 @@ const fileInput   = document.getElementById('file-input');
 
 let lastBookingText = '';  // stores booking text for auto-chaining Part 2
 let _jobDone = false;       // prevents onerror from overwriting a completed job
+let _currentJobId = null;   // tracks the most recent Comscore job for per-job dashboard URL
 
 // Parse Buyer + Film from booking CSV and populate fields
 const BUYER_COLS = ['buyer', 'br'];
@@ -1042,6 +1271,7 @@ async function handleFile(file) {
 
   // Stream output via SSE
   _jobDone = false;
+  _currentJobId = job_id;
   const src = new EventSource('/stream/' + job_id);
   src.onmessage = e => {
     const line = e.data;
@@ -1065,7 +1295,7 @@ async function handleFile(file) {
     if (_jobDone) return;
     src.close();
     appendLine('--- Connection dropped — polling for result…');
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 360; i++) {
       await new Promise(r => setTimeout(r, 5000));
       if (_jobDone) return;
       try {
@@ -1096,13 +1326,15 @@ function setDone() {
   document.getElementById('drop-icon').textContent  = '✅';
   document.getElementById('drop-title').textContent = 'Done! Dashboard is ready.';
   document.getElementById('drop-sub').textContent   = '';
+  const dashUrl = _currentJobId ? '/dashboard/' + _currentJobId : '/dashboard';
   openBtn.classList.remove('secondary');
   openBtn.textContent    = 'Open Dashboard ↗';
+  openBtn.onclick        = () => window.open(dashUrl, '_blank');
   openBtn.style.display  = 'block';
   resetBtn.style.display = 'block';
   const rpb = document.getElementById('run-paste-btn');
   rpb.disabled = false; rpb.textContent = 'Pull Comscore Report';
-  window.open('/dashboard', '_blank');
+  window.open(dashUrl, '_blank');
 }
 
 function setError(msg) {
@@ -1164,6 +1396,7 @@ async function runPaste() {
   }
 
   _jobDone = false;
+  _currentJobId = job_id;
   const src = new EventSource('/stream/' + job_id);
   src.onmessage = e => {
     const line = e.data;
@@ -1177,7 +1410,7 @@ async function runPaste() {
     if (_jobDone) return;
     src.close();
     appendLine('--- Connection dropped — polling for result…');
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 360; i++) {
       await new Promise(r => setTimeout(r, 5000));
       if (_jobDone) return;
       try {
@@ -1246,7 +1479,7 @@ async function runMica() {
   src.onerror = async () => {
     src.close();
     micaAppendLine('--- Connection dropped — polling for result…', 'line-warn');
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 360; i++) {
       await new Promise(r => setTimeout(r, 5000));
       try {
         const r = await fetch('/job-status/' + job_id);
@@ -1273,7 +1506,7 @@ function micaAppendLine(text, cls) {
 
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    b.classList.toggle('active', ['holdover','booking','mass'][i] === name);
+    b.classList.toggle('active', ['holdover','booking','mass','sheets','predictor','boxoffice'][i] === name);
   });
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
@@ -1323,9 +1556,10 @@ function setMassMode(mode) {
 }
 
 async function runBookingUpdate() {
-  const contact     = document.getElementById('booking-contact').value.trim();
-  const title       = document.getElementById('booking-title').value.trim();
-  const filter_type = document.getElementById('booking-filter-type').value;
+  const contact      = document.getElementById('booking-contact').value.trim();
+  const title        = document.getElementById('booking-title').value.trim();
+  const filter_type  = document.getElementById('booking-filter-type').value;
+  const plan_desc    = document.getElementById('booking-plan-desc').value.trim();
   if (!contact) { alert('Please fill in the filter value field.'); return; }
   if (!title)   { alert('Please fill in the Title field.'); return; }
 
@@ -1344,7 +1578,7 @@ async function runBookingUpdate() {
     const res = await fetch('/booking-plan-update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contact, title, booking, mode: bookingMode, filter_type }),
+      body: JSON.stringify({ contact, title, booking, mode: bookingMode, filter_type, plan_desc }),
     });
     ({ job_id } = await res.json());
   } catch (err) {
@@ -1428,6 +1662,15 @@ async function runBookingUpdate() {
         const d = await r.json();
         if (d.status === 'success') {
           _bpJobDone = true;
+          // Fetch stored log lines (may have been lost when SSE dropped)
+          try {
+            const lr = await fetch('/job-log/' + job_id);
+            const ld = await lr.json();
+            if (ld.lines && ld.lines.length) {
+              bookingAppendLine('--- Log (recovered after connection drop) ---', 'line-warn');
+              ld.lines.forEach(l => bookingAppendLine(l));
+            }
+          } catch(_) {}
           bookingAppendLine('✓ Booking plan update complete!', 'line-ok');
           btn.disabled = false; btn.textContent = 'Update Sales Plan ▶';
           document.getElementById('booking-reset-btn').style.display = 'block';
@@ -1645,6 +1888,541 @@ function resetMassUI() {
   btn.disabled = false;
   btn.textContent = 'Run Mass Booking ▶';
 }
+
+// ── Angel Sheet Updates tab ─────────────────────────────────────────────────
+async function refreshOCanadaNextRun() {
+  try {
+    const r = await fetch('/o-canada-next-run');
+    const d = await r.json();
+    if (d && d.next_run_local) {
+      document.getElementById('ocanada-next-run').textContent = 'Next scheduled: ' + d.next_run_local;
+    }
+  } catch(_) {}
+}
+
+function ocanadaAppendLine(text, cls) {
+  const prog = document.getElementById('ocanada-progress');
+  const div  = document.createElement('div');
+  if      (cls)                        div.style.color = cls === 'line-err' ? '#ff6b6b' : (cls === 'line-warn' ? '#ffb84d' : '#7fffb0');
+  else if (/error|failed/i.test(text)) div.style.color = '#ff6b6b';
+  else if (/warning|⚠/i.test(text))    div.style.color = '#ffb84d';
+  else if (/complete|✓|→ wrote/i.test(text)) div.style.color = '#7fffb0';
+  div.textContent = text;
+  prog.appendChild(div);
+  prog.scrollTop = prog.scrollHeight;
+}
+
+async function runOCanadaUpdate() {
+  const dryRun = document.getElementById('ocanada-dry-run').checked;
+  const btn    = document.getElementById('ocanada-run-btn');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+
+  const prog = document.getElementById('ocanada-progress');
+  prog.style.display = 'block';
+  prog.innerHTML = '';
+
+  let job_id;
+  try {
+    const res = await fetch('/o-canada-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
+    const j = await res.json();
+    if (res.status === 409 || j.error) {
+      ocanadaAppendLine('ERROR: ' + (j.error || 'Server rejected the request'), 'line-err');
+      btn.disabled = false; btn.textContent = 'Run O Canada Now ▶';
+      return;
+    }
+    job_id = j.job_id;
+  } catch (err) {
+    ocanadaAppendLine('ERROR: ' + err.message, 'line-err');
+    btn.disabled = false; btn.textContent = 'Run O Canada Now ▶';
+    return;
+  }
+
+  // Helper: fetch the persisted server log and append the per-title summary
+  // block (==== Summary ====) plus per-title preview lines if those haven't
+  // already been shown via SSE.  Lets the dry-run surface "what would be
+  // written" even when the SSE connection drops before the tail arrives.
+  async function ocanadaAppendSummaryFromLog() {
+    try {
+      const r = await fetch('/job-log/' + job_id);
+      const d = await r.json();
+      if (!d || !d.lines || !d.lines.length) return;
+      const progressEl = document.getElementById('ocanada-progress');
+      const shownText = progressEl ? progressEl.innerText : '';
+      // Per-title preview / write lines (helpful during dry-run especially)
+      for (const ln of d.lines) {
+        const isPreview = ln.includes('[dry-run] would write')
+                       || ln.includes('-> wrote ')
+                       || ln.includes('locations=')
+                       || ln.includes('scroll-capture:');
+        if (isPreview && !shownText.includes(ln)) {
+          ocanadaAppendLine(ln);
+        }
+      }
+      // Final Summary block
+      let summaryIdx = -1;
+      for (let i = d.lines.length - 1; i >= 0; i--) {
+        if (d.lines[i].includes('══════ Summary ══════')) { summaryIdx = i; break; }
+      }
+      if (summaryIdx >= 0 && !shownText.includes('══════ Summary ══════')) {
+        for (let i = summaryIdx; i < d.lines.length; i++) {
+          ocanadaAppendLine(d.lines[i]);
+        }
+      }
+    } catch (_) {}
+  }
+
+  let _oJobDone = false;
+  const src = new EventSource('/o-canada-stream/' + job_id);
+  src.onmessage = e => {
+    const line = e.data;
+    if (line === '__PING__') { return; }
+    if (line === '__DONE__') { _oJobDone = true; src.close(); return; }
+    if (line === '__SUCCESS__') {
+      _oJobDone = true; src.close();
+      ocanadaAppendSummaryFromLog().then(() => {
+        ocanadaAppendLine(dryRun ? '✓ Dry run complete — no sheet writes made.' : '✓ O Canada update complete!', 'line-ok');
+        document.getElementById('ocanada-reset-btn').style.display = 'inline-block';
+        btn.disabled = false; btn.textContent = 'Run O Canada Now ▶';
+      });
+      return;
+    }
+    if (line.startsWith('__ERROR__')) {
+      _oJobDone = true; src.close();
+      ocanadaAppendLine('ERROR: ' + line.replace('__ERROR__','').trim(), 'line-err');
+      document.getElementById('ocanada-reset-btn').style.display = 'inline-block';
+      btn.disabled = false; btn.textContent = 'Run O Canada Now ▶';
+      return;
+    }
+    ocanadaAppendLine(line);
+  };
+  src.onerror = async () => {
+    if (_oJobDone) return;
+    src.close();
+    ocanadaAppendLine('--- Connection dropped — polling for result…', 'line-warn');
+    for (let i = 0; i < 240; i++) {  // poll up to 20 min
+      await new Promise(r => setTimeout(r, 5000));
+      if (_oJobDone) return;
+      try {
+        const r = await fetch('/job-status/' + job_id);
+        const d = await r.json();
+        if (d.status === 'success') {
+          _oJobDone = true;
+          await ocanadaAppendSummaryFromLog();
+          ocanadaAppendLine(dryRun ? '✓ Dry run complete — no sheet writes made.' : '✓ O Canada update complete!', 'line-ok');
+          document.getElementById('ocanada-reset-btn').style.display = 'inline-block';
+          btn.disabled = false; btn.textContent = 'Run O Canada Now ▶';
+          return;
+        }
+        if (d.status && d.status.startsWith('error:')) {
+          _oJobDone = true;
+          ocanadaAppendLine('ERROR: ' + d.status.replace('error:','').trim(), 'line-err');
+          document.getElementById('ocanada-reset-btn').style.display = 'inline-block';
+          btn.disabled = false; btn.textContent = 'Run O Canada Now ▶';
+          return;
+        }
+      } catch(_) {}
+    }
+    ocanadaAppendLine('Connection lost.', 'line-err');
+    btn.disabled = false; btn.textContent = 'Run O Canada Now ▶';
+  };
+}
+
+function resetOCanadaUI() {
+  document.getElementById('ocanada-progress').style.display = 'none';
+  document.getElementById('ocanada-progress').innerHTML = '';
+  document.getElementById('ocanada-reset-btn').style.display = 'none';
+  const btn = document.getElementById('ocanada-run-btn');
+  btn.disabled = false;
+  btn.textContent = 'Run O Canada Now ▶';
+}
+
+// Refresh "Next scheduled" on load + every 5 minutes
+refreshOCanadaNextRun();
+setInterval(refreshOCanadaNextRun, 5 * 60 * 1000);
+
+// ── Daily Grosses (Fri/Sat/Sun + WoW deltas) ────────────────────────────────
+async function refreshDailyGrossesNextRun() {
+  try {
+    const r = await fetch('/daily-grosses-next-run');
+    const d = await r.json();
+    if (d && d.next_run_local) {
+      document.getElementById('dailygrosses-next-run').textContent = 'Next scheduled: ' + d.next_run_local;
+    }
+  } catch(_) {}
+}
+
+function dailyGrossesAppendLine(text, cls) {
+  const prog = document.getElementById('dailygrosses-progress');
+  const div  = document.createElement('div');
+  if      (cls)                        div.style.color = cls === 'line-err' ? '#ff6b6b' : (cls === 'line-warn' ? '#ffb84d' : '#7fffb0');
+  else if (/error|failed/i.test(text)) div.style.color = '#ff6b6b';
+  else if (/warning|⚠/i.test(text))    div.style.color = '#ffb84d';
+  else if (/complete|✓|→ wrote/i.test(text)) div.style.color = '#7fffb0';
+  div.textContent = text;
+  prog.appendChild(div);
+  prog.scrollTop = prog.scrollHeight;
+}
+
+async function runDailyGrossesUpdate() {
+  const dryRun = document.getElementById('dailygrosses-dry-run').checked;
+  const btn    = document.getElementById('dailygrosses-run-btn');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+
+  const prog = document.getElementById('dailygrosses-progress');
+  prog.style.display = 'block';
+  prog.innerHTML = '';
+
+  let job_id;
+  try {
+    const res = await fetch('/daily-grosses-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
+    const j = await res.json();
+    if (res.status === 409 || j.error) {
+      dailyGrossesAppendLine('ERROR: ' + (j.error || 'Server rejected the request'), 'line-err');
+      btn.disabled = false; btn.textContent = 'Run Daily Grosses Now ▶';
+      return;
+    }
+    job_id = j.job_id;
+  } catch (err) {
+    dailyGrossesAppendLine('ERROR: ' + err.message, 'line-err');
+    btn.disabled = false; btn.textContent = 'Run Daily Grosses Now ▶';
+    return;
+  }
+
+  let _dgJobDone = false;
+  const src = new EventSource('/daily-grosses-stream/' + job_id);
+  src.onmessage = e => {
+    const line = e.data;
+    if (line === '__PING__') { return; }
+    if (line === '__DONE__') { _dgJobDone = true; src.close(); return; }
+    if (line === '__SUCCESS__') {
+      _dgJobDone = true; src.close();
+      dailyGrossesAppendLine(dryRun ? '✓ Dry run complete — no sheet writes made.' : '✓ Daily Grosses update complete!', 'line-ok');
+      document.getElementById('dailygrosses-reset-btn').style.display = 'inline-block';
+      btn.disabled = false; btn.textContent = 'Run Daily Grosses Now ▶';
+      return;
+    }
+    if (line.startsWith('__ERROR__')) {
+      _dgJobDone = true; src.close();
+      dailyGrossesAppendLine('ERROR: ' + line.replace('__ERROR__','').trim(), 'line-err');
+      document.getElementById('dailygrosses-reset-btn').style.display = 'inline-block';
+      btn.disabled = false; btn.textContent = 'Run Daily Grosses Now ▶';
+      return;
+    }
+    dailyGrossesAppendLine(line);
+  };
+  src.onerror = async () => {
+    if (_dgJobDone) return;
+    src.close();
+    dailyGrossesAppendLine('--- Connection dropped — polling for result…', 'line-warn');
+    for (let i = 0; i < 240; i++) {  // poll up to 20 min
+      await new Promise(r => setTimeout(r, 5000));
+      if (_dgJobDone) return;
+      try {
+        const r = await fetch('/job-status/' + job_id);
+        const d = await r.json();
+        if (d.status === 'success') {
+          _dgJobDone = true;
+          dailyGrossesAppendLine('✓ Daily Grosses update complete!', 'line-ok');
+          document.getElementById('dailygrosses-reset-btn').style.display = 'inline-block';
+          btn.disabled = false; btn.textContent = 'Run Daily Grosses Now ▶';
+          return;
+        }
+        if (d.status && d.status.startsWith('error:')) {
+          _dgJobDone = true;
+          dailyGrossesAppendLine('ERROR: ' + d.status.replace('error:','').trim(), 'line-err');
+          document.getElementById('dailygrosses-reset-btn').style.display = 'inline-block';
+          btn.disabled = false; btn.textContent = 'Run Daily Grosses Now ▶';
+          return;
+        }
+      } catch(_) {}
+    }
+    dailyGrossesAppendLine('Connection lost.', 'line-err');
+    btn.disabled = false; btn.textContent = 'Run Daily Grosses Now ▶';
+  };
+}
+
+function resetDailyGrossesUI() {
+  document.getElementById('dailygrosses-progress').style.display = 'none';
+  document.getElementById('dailygrosses-progress').innerHTML = '';
+  document.getElementById('dailygrosses-reset-btn').style.display = 'none';
+  const btn = document.getElementById('dailygrosses-run-btn');
+  btn.disabled = false;
+  btn.textContent = 'Run Daily Grosses Now ▶';
+}
+
+refreshDailyGrossesNextRun();
+setInterval(refreshDailyGrossesNextRun, 5 * 60 * 1000);
+
+// ── Screen Count (pre-release # of runs from MICA) ──────────────────────────
+async function refreshScreenCountNextRun() {
+  try {
+    const r = await fetch('/screen-count-next-run');
+    const d = await r.json();
+    if (d && d.next_run_local) {
+      document.getElementById('screencount-next-run').textContent = 'Next scheduled: ' + d.next_run_local;
+    }
+  } catch(_) {}
+}
+
+function screenCountAppendLine(text, cls) {
+  const prog = document.getElementById('screencount-progress');
+  const div  = document.createElement('div');
+  if      (cls)                        div.style.color = cls === 'line-err' ? '#ff6b6b' : (cls === 'line-warn' ? '#ffb84d' : '#7fffb0');
+  else if (/error|failed/i.test(text)) div.style.color = '#ff6b6b';
+  else if (/warning|⚠/i.test(text))    div.style.color = '#ffb84d';
+  else if (/complete|✓|→ wrote|>>>/i.test(text)) div.style.color = '#7fffb0';
+  div.textContent = text;
+  prog.appendChild(div);
+  prog.scrollTop = prog.scrollHeight;
+}
+
+async function runScreenCountUpdate() {
+  const dryRun = document.getElementById('screencount-dry-run').checked;
+  const btn    = document.getElementById('screencount-run-btn');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+
+  const prog = document.getElementById('screencount-progress');
+  prog.style.display = 'block';
+  prog.innerHTML = '';
+
+  let job_id;
+  try {
+    const res = await fetch('/screen-count-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
+    const j = await res.json();
+    if (res.status === 409 || j.error) {
+      screenCountAppendLine('ERROR: ' + (j.error || 'Server rejected the request'), 'line-err');
+      btn.disabled = false; btn.textContent = 'Run Pre-Release Screen Count ▶';
+      return;
+    }
+    job_id = j.job_id;
+  } catch (err) {
+    screenCountAppendLine('ERROR: ' + err.message, 'line-err');
+    btn.disabled = false; btn.textContent = 'Run Pre-Release Screen Count ▶';
+    return;
+  }
+
+  let _scJobDone = false;
+  let _scShown   = 0;   // # of subprocess log lines already rendered (for SSE-drop recovery)
+  const flushScreenCountLog = async () => {
+    // Pull the server-buffered log and append any lines the live stream missed
+    // (the count + "would write…" lines arrive during the slow MICA scrape, which
+    // is exactly when the SSE connection tends to drop).
+    try {
+      const r = await fetch('/job-log/' + job_id);
+      const d = await r.json();
+      const lines = (d && d.lines) || [];
+      for (let i = _scShown; i < lines.length; i++) screenCountAppendLine(lines[i]);
+      _scShown = lines.length;
+    } catch(_) {}
+  };
+  const src = new EventSource('/screen-count-stream/' + job_id);
+  src.onmessage = async e => {
+    const line = e.data;
+    if (line === '__PING__') { return; }
+    if (line === '__DONE__') { _scJobDone = true; src.close(); return; }
+    if (line === '__SUCCESS__') {
+      _scJobDone = true; src.close();
+      await flushScreenCountLog();
+      screenCountAppendLine(dryRun ? '✓ Dry run complete — no sheet writes made.' : '✓ Screen Count update complete!', 'line-ok');
+      document.getElementById('screencount-reset-btn').style.display = 'inline-block';
+      btn.disabled = false; btn.textContent = 'Run Pre-Release Screen Count ▶';
+      return;
+    }
+    if (line.startsWith('__ERROR__')) {
+      _scJobDone = true; src.close();
+      screenCountAppendLine('ERROR: ' + line.replace('__ERROR__','').trim(), 'line-err');
+      document.getElementById('screencount-reset-btn').style.display = 'inline-block';
+      btn.disabled = false; btn.textContent = 'Run Pre-Release Screen Count ▶';
+      return;
+    }
+    screenCountAppendLine(line); _scShown++;
+  };
+  src.onerror = async () => {
+    if (_scJobDone) return;
+    src.close();
+    screenCountAppendLine('--- Connection dropped — polling for result…', 'line-warn');
+    for (let i = 0; i < 240; i++) {  // poll up to 20 min
+      await new Promise(r => setTimeout(r, 5000));
+      if (_scJobDone) return;
+      try {
+        const r = await fetch('/job-status/' + job_id);
+        const d = await r.json();
+        if (d.status === 'success') {
+          _scJobDone = true;
+          await flushScreenCountLog();
+          screenCountAppendLine(dryRun ? '✓ Dry run complete — no sheet writes made.' : '✓ Screen Count update complete!', 'line-ok');
+          document.getElementById('screencount-reset-btn').style.display = 'inline-block';
+          btn.disabled = false; btn.textContent = 'Run Pre-Release Screen Count ▶';
+          return;
+        }
+        if (d.status && d.status.startsWith('error:')) {
+          _scJobDone = true;
+          await flushScreenCountLog();
+          screenCountAppendLine('ERROR: ' + d.status.replace('error:','').trim(), 'line-err');
+          document.getElementById('screencount-reset-btn').style.display = 'inline-block';
+          btn.disabled = false; btn.textContent = 'Run Pre-Release Screen Count ▶';
+          return;
+        }
+      } catch(_) {}
+    }
+    screenCountAppendLine('Connection lost.', 'line-err');
+    btn.disabled = false; btn.textContent = 'Run Pre-Release Screen Count ▶';
+  };
+}
+
+function resetScreenCountUI() {
+  document.getElementById('screencount-progress').style.display = 'none';
+  document.getElementById('screencount-progress').innerHTML = '';
+  document.getElementById('screencount-reset-btn').style.display = 'none';
+  const btn = document.getElementById('screencount-run-btn');
+  btn.disabled = false;
+  btn.textContent = 'Run Pre-Release Screen Count ▶';
+}
+
+refreshScreenCountNextRun();
+setInterval(refreshScreenCountNextRun, 5 * 60 * 1000);
+
+// ── Post-Release Screen Count (weeks after release # of runs from MICA) ──────
+async function refreshPostReleaseNextRun() {
+  try {
+    const r = await fetch('/post-release-next-run');
+    const d = await r.json();
+    if (d && d.next_run_local) {
+      document.getElementById('postrelease-next-run').textContent = 'Next scheduled: ' + d.next_run_local;
+    }
+  } catch(_) {}
+}
+
+function postReleaseAppendLine(text, cls) {
+  const prog = document.getElementById('postrelease-progress');
+  const div  = document.createElement('div');
+  if      (cls)                        div.style.color = cls === 'line-err' ? '#ff6b6b' : (cls === 'line-warn' ? '#ffb84d' : '#7fffb0');
+  else if (/error|failed/i.test(text)) div.style.color = '#ff6b6b';
+  else if (/warning|⚠|SKIP/i.test(text)) div.style.color = '#ffb84d';
+  else if (/complete|✓|→|>>>/i.test(text)) div.style.color = '#7fffb0';
+  div.textContent = text;
+  prog.appendChild(div);
+  prog.scrollTop = prog.scrollHeight;
+}
+
+async function runPostReleaseUpdate() {
+  const dryRun = document.getElementById('postrelease-dry-run').checked;
+  const btn    = document.getElementById('postrelease-run-btn');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+
+  const prog = document.getElementById('postrelease-progress');
+  prog.style.display = 'block';
+  prog.innerHTML = '';
+
+  let job_id;
+  try {
+    const res = await fetch('/post-release-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
+    const j = await res.json();
+    if (res.status === 409 || j.error) {
+      postReleaseAppendLine('ERROR: ' + (j.error || 'Server rejected the request'), 'line-err');
+      btn.disabled = false; btn.textContent = 'Run Post-Release Screen Count ▶';
+      return;
+    }
+    job_id = j.job_id;
+  } catch (err) {
+    postReleaseAppendLine('ERROR: ' + err.message, 'line-err');
+    btn.disabled = false; btn.textContent = 'Run Post-Release Screen Count ▶';
+    return;
+  }
+
+  let _prJobDone = false;
+  let _prShown = 0;   // count of real output lines already rendered (SSE or poll fallback)
+  const src = new EventSource('/post-release-stream/' + job_id);
+  src.onmessage = e => {
+    const line = e.data;
+    if (line === '__PING__') { return; }
+    if (line === '__DONE__') { _prJobDone = true; src.close(); return; }
+    if (line === '__SUCCESS__') {
+      _prJobDone = true; src.close();
+      postReleaseAppendLine(dryRun ? '✓ Dry run complete — no sheet writes made.' : '✓ Post-Release Screen Count update complete!', 'line-ok');
+      document.getElementById('postrelease-reset-btn').style.display = 'inline-block';
+      btn.disabled = false; btn.textContent = 'Run Post-Release Screen Count ▶';
+      return;
+    }
+    if (line.startsWith('__ERROR__')) {
+      _prJobDone = true; src.close();
+      postReleaseAppendLine('ERROR: ' + line.replace('__ERROR__','').trim(), 'line-err');
+      document.getElementById('postrelease-reset-btn').style.display = 'inline-block';
+      btn.disabled = false; btn.textContent = 'Run Post-Release Screen Count ▶';
+      return;
+    }
+    postReleaseAppendLine(line);
+    _prShown++;
+  };
+  // The SSO proxy often cuts the long-lived SSE connection mid-run. When that
+  // happens, fall back to polling the buffered job log (which survives the drop)
+  // so the live numbers still render, then poll status for the terminal result.
+  src.onerror = async () => {
+    if (_prJobDone) return;
+    src.close();
+    const finish = (msg, cls) => {
+      _prJobDone = true;
+      postReleaseAppendLine(msg, cls);
+      document.getElementById('postrelease-reset-btn').style.display = 'inline-block';
+      btn.disabled = false; btn.textContent = 'Run Post-Release Screen Count ▶';
+    };
+    for (let i = 0; i < 360; i++) {  // poll up to ~15 min
+      await new Promise(r => setTimeout(r, 2500));
+      if (_prJobDone) return;
+      try {
+        const lr = await fetch('/job-log/' + job_id);
+        const ld = await lr.json();
+        if (Array.isArray(ld.lines) && ld.lines.length > _prShown) {
+          for (let k = _prShown; k < ld.lines.length; k++) postReleaseAppendLine(ld.lines[k]);
+          _prShown = ld.lines.length;
+        }
+        const sr = await fetch('/job-status/' + job_id);
+        const sd = await sr.json();
+        if (sd.status === 'success') {
+          finish(dryRun ? '✓ Dry run complete — no sheet writes made.' : '✓ Post-Release Screen Count update complete!', 'line-ok');
+          return;
+        }
+        if (sd.status && sd.status.startsWith('error:')) {
+          finish('ERROR: ' + sd.status.replace('error:','').trim(), 'line-err');
+          return;
+        }
+      } catch(_) {}
+    }
+    finish('Connection lost.', 'line-err');
+  };
+}
+
+function resetPostReleaseUI() {
+  document.getElementById('postrelease-progress').style.display = 'none';
+  document.getElementById('postrelease-progress').innerHTML = '';
+  document.getElementById('postrelease-reset-btn').style.display = 'none';
+  const btn = document.getElementById('postrelease-run-btn');
+  btn.disabled = false;
+  btn.textContent = 'Run Post-Release Screen Count ▶';
+}
+
+refreshPostReleaseNextRun();
+setInterval(refreshPostReleaseNextRun, 5 * 60 * 1000);
 
 function alignSteps() {
   const panel  = document.getElementById('steps-panel');
@@ -1915,6 +2693,54 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_response(302); self.send_header('Location', '/auth/login'); self.end_headers(); return
             self._send_html(HTML)
 
+        # ── Booking Coverage (Snowflake committed-vs-actual dashboard) ──────
+        elif self.path == '/booking-coverage':
+            try:
+                with open(os.path.join(os.path.dirname(__file__), 'booking_coverage.html'), encoding='utf-8') as _f:
+                    self._send_html(_f.read())
+            except Exception as e:
+                self._send_html(f"<p>Booking Coverage error: {e}</p>")
+
+        elif self.path == '/api/titles':
+            if _bc is None: self._json({'error': 'booking_coverage unavailable'}); return
+            try: self._json(_bc.get_titles())
+            except Exception as e: self._json({'error': str(e)})
+
+        elif self.path.startswith('/api/coverage'):
+            if _bc is None: self._json({'error': 'booking_coverage unavailable'}); return
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            slug = qs.get('slug', [''])[0]; start = qs.get('start', [''])[0]; end = qs.get('end', [''])[0]
+            force = qs.get('force', [''])[0] in ('1', 'true', 'yes')
+            if not (slug and start and end): self._json({'error': 'slug, start, end required'}); return
+            try: self._json(_bc.get_coverage(slug, start, end, force=force))
+            except Exception as e: self._json({'error': str(e)})
+
+        elif self.path.startswith('/api/showtimes'):
+            if _bc is None: self._json({'error': 'booking_coverage unavailable'}); return
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            slug = qs.get('slug', [''])[0]; start = qs.get('start', [''])[0]
+            end = qs.get('end', [''])[0]; pvid = qs.get('pvid', [''])[0]
+            if not (slug and start and end and pvid): self._json({'error': 'slug, start, end, pvid required'}); return
+            try: self._json(_bc.fetch_showtimes(slug, start, end, pvid))
+            except Exception as e: self._json({'error': str(e)})
+
+        elif self.path.startswith('/api/export'):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            slug = qs.get('slug', [''])[0]; start = qs.get('start', [''])[0]; end = qs.get('end', [''])[0]
+            if _bc is None or not (slug and start and end):
+                self.send_response(400); self.end_headers(); return
+            try:
+                xlsx = _bc.build_xlsx(slug, start, end, flag=qs.get('flag', [''])[0],
+                                      booker=qs.get('booker', [''])[0], q=qs.get('q', [''])[0])
+                fname = f"BookingCoverage_{slug}_{start}_{end}.xlsx"
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                self.send_header('Content-Disposition', f'attachment; filename="{fname}"')
+                self.send_header('Content-Length', str(len(xlsx)))
+                self.end_headers(); self.wfile.write(xlsx)
+            except Exception as e:
+                self.send_response(500); self.end_headers(); self.wfile.write(str(e).encode())
+
         elif self.path.startswith('/stream/'):
             job_id = self.path[len('/stream/'):]
             self._sse_stream(job_id)
@@ -1927,10 +2753,68 @@ class Handler(http.server.BaseHTTPRequestHandler):
             job_id = self.path[len('/booking-plan-stream/'):]
             self._sse_stream(job_id)
 
+        elif self.path.startswith('/o-canada-stream/'):
+            job_id = self.path[len('/o-canada-stream/'):]
+            self._sse_stream(job_id)
+
+        elif self.path == '/o-canada-next-run':
+            body = json.dumps(_o_canada_next_run_info()).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif self.path.startswith('/daily-grosses-stream/'):
+            job_id = self.path[len('/daily-grosses-stream/'):]
+            self._sse_stream(job_id)
+
+        elif self.path == '/daily-grosses-next-run':
+            body = json.dumps(_daily_grosses_next_run_info()).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif self.path.startswith('/screen-count-stream/'):
+            job_id = self.path[len('/screen-count-stream/'):]
+            self._sse_stream(job_id)
+
+        elif self.path == '/screen-count-next-run':
+            body = json.dumps(_screen_count_next_run_info()).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif self.path.startswith('/post-release-stream/'):
+            job_id = self.path[len('/post-release-stream/'):]
+            self._sse_stream(job_id)
+
+        elif self.path == '/post-release-next-run':
+            body = json.dumps(_post_release_next_run_info()).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         elif self.path.startswith('/job-status/'):
             job_id = self.path[len('/job-status/'):]
             result = _job_results.get(job_id, 'pending')
             body = json.dumps({'status': result, 'unbooked': _job_unbooked.get(job_id, []), 'already_booked': _job_already_booked.get(job_id, []), 'missed': _job_missed.get(job_id, [])}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif self.path.startswith('/job-log/'):
+            job_id = self.path[len('/job-log/'):]
+            lines  = _job_logs.get(job_id, [])
+            body   = json.dumps({'lines': lines}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -1971,8 +2855,59 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path == '/bg-video':
             self._serve_video(VIDEO_PATH)
 
-        elif self.path == '/dashboard':
-            p = OUTPUT_DIR / 'flash_gross_dashboard.html'
+        elif self.path == '/theater-predictor':
+            p = STATIC_DIR / 'theater_predictor.html'
+            if p.exists():
+                data = p.read_bytes()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self._send_html('<h2 style="font-family:sans-serif;padding:40px">Theater Predictor dashboard not found.</h2>')
+
+        elif self.path == '/box-office':
+            # Embedded Box Office Estimator dashboard. Fetch the page from the
+            # box-office-estimator app over Fly's private network (.internal bypasses
+            # the SSO proxy + X-Frame-Options), and repoint its data fetch at the
+            # same-origin proxy route below so it loads inside this iframe.
+            import urllib.request as _ur
+            try:
+                with _ur.urlopen('http://box-office-estimator.internal:8080/', timeout=12) as r:
+                    html = r.read().decode('utf-8', 'ignore')
+                data = html.replace('fetch("data.json"', 'fetch("/box-office-data"').encode('utf-8')
+            except Exception as e:
+                data = ('<body style="background:#0f1115;color:#e6e9ef;font-family:sans-serif">'
+                        '<h2 style="padding:40px">Box Office Estimator is unavailable right now.</h2>'
+                        '<p style="padding:0 40px;color:#9aa3b2">' + str(e) + '</p></body>').encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        elif self.path == '/box-office-data':
+            import urllib.request as _ur
+            try:
+                with _ur.urlopen('http://box-office-estimator.internal:8080/data.json', timeout=12) as r:
+                    data = r.read()
+            except Exception:
+                data = b'[]'
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        elif self.path == '/dashboard' or self.path.startswith('/dashboard/'):
+            if self.path.startswith('/dashboard/'):
+                jid = self.path[len('/dashboard/'):]
+                p = OUTPUT_DIR / f'flash_gross_{jid}.html'
+            else:
+                # Fall back to most recently modified per-job dashboard
+                candidates = sorted(OUTPUT_DIR.glob('flash_gross_*.html'), key=lambda f: f.stat().st_mtime, reverse=True)
+                p = candidates[0] if candidates else OUTPUT_DIR / 'flash_gross_dashboard.html'
             if p.exists():
                 data = p.read_bytes()
                 self.send_response(200)
@@ -2137,6 +3072,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             booking     = payload.get('booking',     '').strip()
             mode        = payload.get('mode',        'demo').strip()
             filter_type = payload.get('filter_type', 'contact_person').strip()
+            plan_desc   = payload.get('plan_desc',   '').strip()
             if mode not in ('demo', 'prod'):
                 mode = 'demo'
             if filter_type not in ('contact_person', 'booker', 'venue_group', 'venue', 'tv_market'):
@@ -2160,7 +3096,177 @@ class Handler(http.server.BaseHTTPRequestHandler):
             _job_queues[job_id] = queue.Queue()
             threading.Thread(
                 target=_run_booking_plan,
-                args=(title, contact, booking_path, job_id, mode, user_creds, filter_type),
+                args=(title, contact, booking_path, job_id, mode, user_creds, filter_type, plan_desc),
+                daemon=True,
+            ).start()
+
+            body = json.dumps({'job_id': job_id}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif self.path == '/o-canada-update':
+            length = int(self.headers.get('Content-Length', 0))
+            raw    = self.rfile.read(length)
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            dry_run = bool(payload.get('dry_run', False))
+
+            # Reject if another O Canada job is already running (prevents login races)
+            if _o_canada_is_running():
+                body = json.dumps({'error': 'An O Canada run is already in progress. Wait for it to finish.'}).encode()
+                self.send_response(409)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            # Get the session user's creds (manual Run Now uses the logged-in user's Comscore creds)
+            user_creds = {}
+            if _db:
+                if _AUTH_ENABLED and _auth:
+                    user = _auth.get_session_user(self)
+                    if user:
+                        user_creds = _db.get_credentials(user['id'])
+                else:
+                    user_creds = _db.get_credentials(_LOCAL_USER_ID)
+
+            job_id = 'oc_' + str(int(time.time() * 1000))
+            _job_queues[job_id] = queue.Queue()
+            threading.Thread(
+                target=_run_o_canada,
+                args=(job_id, dry_run, user_creds),
+                daemon=True,
+            ).start()
+
+            body = json.dumps({'job_id': job_id}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif self.path == '/daily-grosses-update':
+            length = int(self.headers.get('Content-Length', 0))
+            raw    = self.rfile.read(length)
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            dry_run = bool(payload.get('dry_run', False))
+
+            if _daily_grosses_is_running():
+                body = json.dumps({'error': 'A Daily Grosses run is already in progress. Wait for it to finish.'}).encode()
+                self.send_response(409)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            user_creds = {}
+            if _db:
+                if _AUTH_ENABLED and _auth:
+                    user = _auth.get_session_user(self)
+                    if user:
+                        user_creds = _db.get_credentials(user['id'])
+                else:
+                    user_creds = _db.get_credentials(_LOCAL_USER_ID)
+
+            job_id = 'dg_' + str(int(time.time() * 1000))
+            _job_queues[job_id] = queue.Queue()
+            threading.Thread(
+                target=_run_daily_grosses,
+                args=(job_id, dry_run, user_creds),
+                daemon=True,
+            ).start()
+
+            body = json.dumps({'job_id': job_id}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif self.path == '/screen-count-update':
+            length = int(self.headers.get('Content-Length', 0))
+            raw    = self.rfile.read(length)
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            dry_run = bool(payload.get('dry_run', False))
+
+            if _screen_count_is_running():
+                body = json.dumps({'error': 'A Screen Count run is already in progress. Wait for it to finish.'}).encode()
+                self.send_response(409)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            user_creds = {}
+            if _db:
+                if _AUTH_ENABLED and _auth:
+                    user = _auth.get_session_user(self)
+                    if user:
+                        user_creds = _db.get_credentials(user['id'])
+                else:
+                    user_creds = _db.get_credentials(_LOCAL_USER_ID)
+
+            job_id = 'sc_' + str(int(time.time() * 1000))
+            _job_queues[job_id] = queue.Queue()
+            threading.Thread(
+                target=_run_screen_count,
+                args=(job_id, dry_run, user_creds),
+                daemon=True,
+            ).start()
+
+            body = json.dumps({'job_id': job_id}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif self.path == '/post-release-update':
+            length = int(self.headers.get('Content-Length', 0))
+            raw    = self.rfile.read(length)
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            dry_run = bool(payload.get('dry_run', False))
+
+            if _post_release_is_running():
+                body = json.dumps({'error': 'A Post-Release Screen Count run is already in progress. Wait for it to finish.'}).encode()
+                self.send_response(409)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            user_creds = {}
+            if _db:
+                if _AUTH_ENABLED and _auth:
+                    user = _auth.get_session_user(self)
+                    if user:
+                        user_creds = _db.get_credentials(user['id'])
+                else:
+                    user_creds = _db.get_credentials(_LOCAL_USER_ID)
+
+            job_id = 'pr_' + str(int(time.time() * 1000))
+            _job_queues[job_id] = queue.Queue()
+            threading.Thread(
+                target=_run_post_release,
+                args=(job_id, dry_run, user_creds),
                 daemon=True,
             ).start()
 
@@ -2331,6 +3437,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type',  'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
         self.send_header('Connection',    'keep-alive')
+        self.send_header('X-Accel-Buffering', 'no')  # ask the SSO proxy not to buffer the stream
         self.end_headers()
 
         try:
@@ -2687,7 +3794,8 @@ def _run_tool(csv_path: Path, job_id: str, user_creds: dict = {}):
 
         try:
             proc = subprocess.Popen(
-                [sys.executable, str(BASE_DIR / 'flash_gross_tool.py'), str(csv_path)],
+                [sys.executable, str(BASE_DIR / 'flash_gross_tool.py'), str(csv_path),
+                 '--output', str(OUTPUT_DIR / f'flash_gross_{job_id}.html')],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -2823,9 +3931,10 @@ def _ensure_bp_daemon(slot: int, mode: str, user_creds: dict):
 # Booking plan runner (background thread)
 # ---------------------------------------------------------------------------
 
-def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str, mode: str = 'demo', user_creds: dict = {}, filter_type: str = 'contact_person'):
+def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str, mode: str = 'demo', user_creds: dict = {}, filter_type: str = 'contact_person', plan_desc: str = ''):
     import json as _json
     q = _job_queues[job_id]
+    _job_logs[job_id] = []
     try:
         booking_text = ''
         if booking_path and Path(booking_path).exists():
@@ -2839,6 +3948,7 @@ def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str,
                 'contact': contact,
                 'booking_text': booking_text,
                 'filter_type': filter_type,
+                'plan_desc': plan_desc,
             })
             _bp_procs[slot].stdin.write(job_payload + '\n')
             _bp_procs[slot].stdin.flush()
@@ -2871,6 +3981,7 @@ def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str,
                     except Exception:
                         pass
                 else:
+                    _job_logs[job_id].append(stripped)
                     q.put(stripped)
 
         finally:
@@ -2886,6 +3997,574 @@ def _run_booking_plan(title: str, contact: str, booking_path: Path, job_id: str,
 # ---------------------------------------------------------------------------
 # Mass booking plan runner (background thread)
 # ---------------------------------------------------------------------------
+
+_o_canada_running_lock = threading.Lock()
+_o_canada_running_flag = {'active': False}
+
+
+def _o_canada_is_running() -> bool:
+    with _o_canada_running_lock:
+        return _o_canada_running_flag['active']
+
+
+def _run_o_canada(job_id: str, dry_run: bool, user_creds: dict):
+    """Subprocess runner for o_canada_update.py — streams output to the SSE queue."""
+    with _o_canada_running_lock:
+        if _o_canada_running_flag['active']:
+            q = _job_queues.get(job_id)
+            if q is not None:
+                q.put('__ERROR__ Another O Canada run is already in progress')
+                q.put(None)
+            _job_results[job_id] = 'error: another run already in progress'
+            return
+        _o_canada_running_flag['active'] = True
+
+    q = _job_queues[job_id]
+    # Per-job persistent log buffer so the UI can re-fetch the summary block
+    # if the SSE stream drops before all lines are delivered (a known cosmetic
+    # issue on long runs).  Served via /job-log/<job_id>.
+    _job_logs[job_id] = []
+    try:
+        cmd = [sys.executable, '-u', str(BASE_DIR / 'o_canada_update.py')]
+        if dry_run:
+            cmd += ['--dry-run']
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            env=_build_env(user_creds),
+            cwd=str(BASE_DIR),
+        )
+        for line in proc.stdout:
+            line = line.rstrip()
+            print(f'[ocanada] {line}', flush=True)
+            q.put(line)
+            _job_logs[job_id].append(line)
+        proc.wait()
+        if proc.returncode == 0:
+            _job_results[job_id] = 'success'
+            q.put('__SUCCESS__')
+        else:
+            _job_results[job_id] = f'error: O Canada script exited with code {proc.returncode}'
+            q.put(f'__ERROR__ O Canada script exited with code {proc.returncode}')
+    except Exception as exc:
+        print(f'[ocanada] EXCEPTION: {exc}', flush=True)
+        _job_results[job_id] = f'error: {exc}'
+        q.put(f'__ERROR__ {exc}')
+    finally:
+        with _o_canada_running_lock:
+            _o_canada_running_flag['active'] = False
+        q.put(None)
+
+
+# ---------------------------------------------------------------------------
+# O Canada weekly cron — runs every Friday at 9:00 AM Mountain Time
+# ---------------------------------------------------------------------------
+
+import zoneinfo  # stdlib, available since Python 3.9
+
+_OCANADA_CRON_USER_EMAIL = os.getenv('OCANADA_CRON_USER_EMAIL', 'tommy.gonzalez@angel.com')
+# Use America/Denver — Tommy's local Mountain time, observes DST.  Cron always
+# fires at 9 AM on Tommy's wall clock year-round.  (Previously America/Phoenix
+# was used as "permanent MST" but that meant 10 AM Tommy's clock in summer.)
+_OCANADA_CRON_TZ         = zoneinfo.ZoneInfo('America/Denver')
+_OCANADA_CRON_TZ_LABEL   = 'MT'  # generic Mountain — MDT in summer, MST in winter
+_OCANADA_CRON_WEEKDAY    = 4  # Friday
+_OCANADA_CRON_HOUR       = 9  # 9 AM
+_OCANADA_CRON_MINUTE     = 0
+
+
+def _o_canada_next_fire(now=None):
+    """Return the next datetime (tz-aware, Mountain) at which the cron should fire."""
+    import datetime as _dt
+    if now is None:
+        now = _dt.datetime.now(tz=_OCANADA_CRON_TZ)
+    else:
+        now = now.astimezone(_OCANADA_CRON_TZ)
+    days_ahead = (_OCANADA_CRON_WEEKDAY - now.weekday()) % 7
+    candidate = now.replace(hour=_OCANADA_CRON_HOUR, minute=_OCANADA_CRON_MINUTE,
+                            second=0, microsecond=0) + _dt.timedelta(days=days_ahead)
+    if candidate <= now:
+        candidate += _dt.timedelta(days=7)
+    return candidate
+
+
+def _o_canada_next_run_info() -> dict:
+    """For the /o-canada-next-run JSON endpoint."""
+    try:
+        nxt = _o_canada_next_fire()
+        fmt = '%A, %b %-d at %-I:%M %p' if os.name != 'nt' else '%A, %b %#d at %#I:%M %p'
+        return {
+            'next_run_local': nxt.strftime(fmt) + f' {_OCANADA_CRON_TZ_LABEL}',
+            'next_run_iso':   nxt.isoformat(),
+        }
+    except Exception as exc:
+        return {'error': str(exc)}
+
+
+def _o_canada_scheduler():
+    """Background thread: sleeps until the next Friday 9 AM MT, then fires the job."""
+    import datetime as _dt
+    while True:
+        try:
+            nxt = _o_canada_next_fire()
+            now = _dt.datetime.now(tz=_OCANADA_CRON_TZ)
+            sleep_s = (nxt - now).total_seconds()
+            if sleep_s > 0:
+                print(f'[ocanada-cron] next fire: {nxt.isoformat()} (sleeping {sleep_s/3600:.2f}h)', flush=True)
+                # Sleep in chunks so we wake on machine restart / config change quickly
+                while sleep_s > 0:
+                    chunk = min(sleep_s, 3600)  # max 1 hour per sleep
+                    time.sleep(chunk)
+                    sleep_s = (nxt - _dt.datetime.now(tz=_OCANADA_CRON_TZ)).total_seconds()
+            # Fire
+            print(f'[ocanada-cron] firing scheduled run at {_dt.datetime.now(tz=_OCANADA_CRON_TZ).isoformat()}', flush=True)
+            try:
+                # Look up the designated cron user's creds
+                cron_user_creds = {}
+                if _db:
+                    user = _db.get_user_by_email(_OCANADA_CRON_USER_EMAIL)
+                    if user:
+                        cron_user_creds = _db.get_credentials(user['id'])
+                    else:
+                        print(f'[ocanada-cron] WARNING: cron user {_OCANADA_CRON_USER_EMAIL} not found in DB', flush=True)
+
+                if not cron_user_creds.get('comscore_user'):
+                    print(f'[ocanada-cron] ERROR: no Comscore creds for {_OCANADA_CRON_USER_EMAIL}; skipping run', flush=True)
+                else:
+                    job_id = 'oc_cron_' + str(int(time.time() * 1000))
+                    _job_queues[job_id] = queue.Queue()
+                    # Run in this thread (synchronous) — the cron thread is its own context
+                    _run_o_canada(job_id, dry_run=False, user_creds=cron_user_creds)
+                    print(f'[ocanada-cron] job {job_id} result: {_job_results.get(job_id, "?")}', flush=True)
+            except Exception as exc:
+                print(f'[ocanada-cron] EXCEPTION during fire: {exc}', flush=True)
+            # Loop back to compute next fire (which will be 7 days out)
+            time.sleep(60)  # avoid double-fire in the same minute
+        except Exception as exc:
+            print(f'[ocanada-cron] scheduler loop error: {exc} — sleeping 5 min', flush=True)
+            time.sleep(300)
+
+
+# ---------------------------------------------------------------------------
+# Daily Grosses (Fri/Sat/Sun + WoW deltas) — Tuesday 9 AM MST cron
+# ---------------------------------------------------------------------------
+
+_daily_grosses_running_lock = threading.Lock()
+_daily_grosses_running_flag = {'active': False}
+
+
+def _daily_grosses_is_running() -> bool:
+    with _daily_grosses_running_lock:
+        return _daily_grosses_running_flag['active']
+
+
+def _run_daily_grosses(job_id: str, dry_run: bool, user_creds: dict):
+    """Subprocess runner for daily_grosses_update.py — streams output to the SSE queue."""
+    with _daily_grosses_running_lock:
+        if _daily_grosses_running_flag['active']:
+            q = _job_queues.get(job_id)
+            if q is not None:
+                q.put('__ERROR__ Another Daily Grosses run is already in progress')
+                q.put(None)
+            _job_results[job_id] = 'error: another run already in progress'
+            return
+        _daily_grosses_running_flag['active'] = True
+
+    q = _job_queues[job_id]
+    try:
+        cmd = [sys.executable, '-u', str(BASE_DIR / 'daily_grosses_update.py')]
+        if dry_run:
+            cmd += ['--dry-run']
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            env=_build_env(user_creds),
+            cwd=str(BASE_DIR),
+        )
+        for line in proc.stdout:
+            line = line.rstrip()
+            print(f'[dailygrosses] {line}', flush=True)
+            q.put(line)
+        proc.wait()
+        if proc.returncode == 0:
+            _job_results[job_id] = 'success'
+            q.put('__SUCCESS__')
+        else:
+            _job_results[job_id] = f'error: Daily Grosses script exited with code {proc.returncode}'
+            q.put(f'__ERROR__ Daily Grosses script exited with code {proc.returncode}')
+    except Exception as exc:
+        print(f'[dailygrosses] EXCEPTION: {exc}', flush=True)
+        _job_results[job_id] = f'error: {exc}'
+        q.put(f'__ERROR__ {exc}')
+    finally:
+        with _daily_grosses_running_lock:
+            _daily_grosses_running_flag['active'] = False
+        q.put(None)
+
+
+_DAILYGROSSES_CRON_USER_EMAIL = os.getenv('DAILYGROSSES_CRON_USER_EMAIL', 'tommy.gonzalez@angel.com')
+# America/Denver — Tommy's local Mountain time (auto-DST), so the cron fires
+# at 9 AM on Tommy's wall clock year-round.
+_DAILYGROSSES_CRON_TZ         = zoneinfo.ZoneInfo('America/Denver')
+_DAILYGROSSES_CRON_TZ_LABEL   = 'MT'
+_DAILYGROSSES_CRON_WEEKDAY    = 1  # Tuesday (Mon=0, Tue=1, ...)
+_DAILYGROSSES_CRON_HOUR       = 9  # 9 AM
+_DAILYGROSSES_CRON_MINUTE     = 0
+
+
+def _daily_grosses_next_fire(now=None):
+    import datetime as _dt
+    if now is None:
+        now = _dt.datetime.now(tz=_DAILYGROSSES_CRON_TZ)
+    else:
+        now = now.astimezone(_DAILYGROSSES_CRON_TZ)
+    days_ahead = (_DAILYGROSSES_CRON_WEEKDAY - now.weekday()) % 7
+    candidate = now.replace(hour=_DAILYGROSSES_CRON_HOUR, minute=_DAILYGROSSES_CRON_MINUTE,
+                            second=0, microsecond=0) + _dt.timedelta(days=days_ahead)
+    if candidate <= now:
+        candidate += _dt.timedelta(days=7)
+    return candidate
+
+
+def _daily_grosses_next_run_info() -> dict:
+    try:
+        nxt = _daily_grosses_next_fire()
+        fmt = '%A, %b %-d at %-I:%M %p' if os.name != 'nt' else '%A, %b %#d at %#I:%M %p'
+        return {
+            'next_run_local': nxt.strftime(fmt) + f' {_DAILYGROSSES_CRON_TZ_LABEL}',
+            'next_run_iso':   nxt.isoformat(),
+        }
+    except Exception as exc:
+        return {'error': str(exc)}
+
+
+def _daily_grosses_scheduler():
+    """Background thread: sleeps until next Tuesday 9 AM MST, then fires the job."""
+    import datetime as _dt
+    while True:
+        try:
+            nxt = _daily_grosses_next_fire()
+            now = _dt.datetime.now(tz=_DAILYGROSSES_CRON_TZ)
+            sleep_s = (nxt - now).total_seconds()
+            if sleep_s > 0:
+                print(f'[dailygrosses-cron] next fire: {nxt.isoformat()} (sleeping {sleep_s/3600:.2f}h)', flush=True)
+                while sleep_s > 0:
+                    chunk = min(sleep_s, 3600)
+                    time.sleep(chunk)
+                    sleep_s = (nxt - _dt.datetime.now(tz=_DAILYGROSSES_CRON_TZ)).total_seconds()
+            print(f'[dailygrosses-cron] firing scheduled run at {_dt.datetime.now(tz=_DAILYGROSSES_CRON_TZ).isoformat()}', flush=True)
+            try:
+                cron_user_creds = {}
+                if _db:
+                    user = _db.get_user_by_email(_DAILYGROSSES_CRON_USER_EMAIL)
+                    if user:
+                        cron_user_creds = _db.get_credentials(user['id'])
+                    else:
+                        print(f'[dailygrosses-cron] WARNING: cron user {_DAILYGROSSES_CRON_USER_EMAIL} not found in DB', flush=True)
+
+                if not cron_user_creds.get('comscore_user'):
+                    print(f'[dailygrosses-cron] ERROR: no Comscore creds for {_DAILYGROSSES_CRON_USER_EMAIL}; skipping run', flush=True)
+                else:
+                    job_id = 'dg_cron_' + str(int(time.time() * 1000))
+                    _job_queues[job_id] = queue.Queue()
+                    _run_daily_grosses(job_id, dry_run=False, user_creds=cron_user_creds)
+                    print(f'[dailygrosses-cron] job {job_id} result: {_job_results.get(job_id, "?")}', flush=True)
+            except Exception as exc:
+                print(f'[dailygrosses-cron] EXCEPTION during fire: {exc}', flush=True)
+            time.sleep(60)
+        except Exception as exc:
+            print(f'[dailygrosses-cron] scheduler loop error: {exc} — sleeping 5 min', flush=True)
+            time.sleep(300)
+
+
+# ---------------------------------------------------------------------------
+# Screen Count (pre-release # of runs from MICA) — Wed + Fri 6 PM PT cron
+# ---------------------------------------------------------------------------
+
+_screen_count_running_lock = threading.Lock()
+_screen_count_running_flag = {'active': False}
+
+
+def _screen_count_is_running() -> bool:
+    with _screen_count_running_lock:
+        return _screen_count_running_flag['active']
+
+
+def _run_screen_count(job_id: str, dry_run: bool, user_creds: dict):
+    """Subprocess runner for screen_count_update.py — streams output to the SSE queue."""
+    with _screen_count_running_lock:
+        if _screen_count_running_flag['active']:
+            q = _job_queues.get(job_id)
+            if q is not None:
+                q.put('__ERROR__ Another Screen Count run is already in progress')
+                q.put(None)
+            _job_results[job_id] = 'error: another run already in progress'
+            return
+        _screen_count_running_flag['active'] = True
+
+    q = _job_queues[job_id]
+    _job_logs[job_id] = []   # buffer every line so the UI can recover the count after an SSE drop
+    try:
+        cmd = [sys.executable, '-u', str(BASE_DIR / 'screen_count_update.py'), '--mode', 'prod']
+        if dry_run:
+            cmd += ['--dry-run']
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            env=_build_env(user_creds),
+            cwd=str(BASE_DIR),
+        )
+        for line in proc.stdout:
+            line = line.rstrip()
+            print(f'[screencount] {line}', flush=True)
+            q.put(line)
+            _job_logs[job_id].append(line)
+        proc.wait()
+        if proc.returncode == 0:
+            _job_results[job_id] = 'success'
+            q.put('__SUCCESS__')
+        else:
+            _job_results[job_id] = f'error: Screen Count script exited with code {proc.returncode}'
+            q.put(f'__ERROR__ Screen Count script exited with code {proc.returncode}')
+    except Exception as exc:
+        print(f'[screencount] EXCEPTION: {exc}', flush=True)
+        _job_results[job_id] = f'error: {exc}'
+        q.put(f'__ERROR__ {exc}')
+    finally:
+        with _screen_count_running_lock:
+            _screen_count_running_flag['active'] = False
+        q.put(None)
+
+
+_SCREENCOUNT_CRON_USER_EMAIL = os.getenv('SCREENCOUNT_CRON_USER_EMAIL', 'tommy.gonzalez@angel.com')
+_SCREENCOUNT_CRON_TZ         = zoneinfo.ZoneInfo('America/Los_Angeles')
+_SCREENCOUNT_CRON_TZ_LABEL   = 'PT'
+# Per-weekday fire times (weekday -> (hour, minute), local America/Denver).
+# Wednesday 6 PM = tickets-on-sale columns; Friday 6 PM = release-countdown columns.
+_SCREENCOUNT_CRON_SCHEDULE   = {2: (18, 0), 4: (18, 0)}
+
+
+def _screen_count_next_fire(now=None):
+    import datetime as _dt
+    if now is None:
+        now = _dt.datetime.now(tz=_SCREENCOUNT_CRON_TZ)
+    else:
+        now = now.astimezone(_SCREENCOUNT_CRON_TZ)
+    candidates = []
+    for wd, (hour, minute) in _SCREENCOUNT_CRON_SCHEDULE.items():
+        days_ahead = (wd - now.weekday()) % 7
+        cand = now.replace(hour=hour, minute=minute,
+                           second=0, microsecond=0) + _dt.timedelta(days=days_ahead)
+        if cand <= now:
+            cand += _dt.timedelta(days=7)
+        candidates.append(cand)
+    return min(candidates)
+
+
+def _screen_count_next_run_info() -> dict:
+    try:
+        nxt = _screen_count_next_fire()
+        fmt = '%A, %b %-d at %-I:%M %p' if os.name != 'nt' else '%A, %b %#d at %#I:%M %p'
+        return {
+            'next_run_local': nxt.strftime(fmt) + f' {_SCREENCOUNT_CRON_TZ_LABEL}',
+            'next_run_iso':   nxt.isoformat(),
+        }
+    except Exception as exc:
+        return {'error': str(exc)}
+
+
+def _screen_count_scheduler():
+    """Background thread: sleeps until the next fire (Wed/Fri 6 PM PT), then runs the job."""
+    import datetime as _dt
+    while True:
+        try:
+            nxt = _screen_count_next_fire()
+            now = _dt.datetime.now(tz=_SCREENCOUNT_CRON_TZ)
+            sleep_s = (nxt - now).total_seconds()
+            if sleep_s > 0:
+                print(f'[screencount-cron] next fire: {nxt.isoformat()} (sleeping {sleep_s/3600:.2f}h)', flush=True)
+                while sleep_s > 0:
+                    chunk = min(sleep_s, 3600)
+                    time.sleep(chunk)
+                    sleep_s = (nxt - _dt.datetime.now(tz=_SCREENCOUNT_CRON_TZ)).total_seconds()
+            print(f'[screencount-cron] firing scheduled run at {_dt.datetime.now(tz=_SCREENCOUNT_CRON_TZ).isoformat()}', flush=True)
+            try:
+                cron_user_creds = {}
+                if _db:
+                    user = _db.get_user_by_email(_SCREENCOUNT_CRON_USER_EMAIL)
+                    if user:
+                        cron_user_creds = _db.get_credentials(user['id'])
+                    else:
+                        print(f'[screencount-cron] WARNING: cron user {_SCREENCOUNT_CRON_USER_EMAIL} not found in DB', flush=True)
+
+                if not cron_user_creds.get('mica_user'):
+                    print(f'[screencount-cron] ERROR: no MICA creds for {_SCREENCOUNT_CRON_USER_EMAIL}; skipping run', flush=True)
+                else:
+                    job_id = 'sc_cron_' + str(int(time.time() * 1000))
+                    _job_queues[job_id] = queue.Queue()
+                    _run_screen_count(job_id, dry_run=False, user_creds=cron_user_creds)
+                    print(f'[screencount-cron] job {job_id} result: {_job_results.get(job_id, "?")}', flush=True)
+            except Exception as exc:
+                print(f'[screencount-cron] EXCEPTION during fire: {exc}', flush=True)
+            time.sleep(60)
+        except Exception as exc:
+            print(f'[screencount-cron] scheduler loop error: {exc} — sleeping 5 min', flush=True)
+            time.sleep(300)
+
+
+# ---------------------------------------------------------------------------
+# Post-Release Screen Count (weeks-after-release # of runs from MICA) — Fri 9 AM cron
+# ---------------------------------------------------------------------------
+
+_post_release_running_lock = threading.Lock()
+_post_release_running_flag = {'active': False}
+
+
+def _post_release_is_running() -> bool:
+    with _post_release_running_lock:
+        return _post_release_running_flag['active']
+
+
+def _run_post_release(job_id: str, dry_run: bool, user_creds: dict, force: bool = False):
+    """Subprocess runner for post_release_screen_count.py — streams output to the SSE queue.
+    The scheduled Friday run passes force=True so it overrides any value an early pull left."""
+    with _post_release_running_lock:
+        if _post_release_running_flag['active']:
+            q = _job_queues.get(job_id)
+            if q is not None:
+                q.put('__ERROR__ Another Post-Release Screen Count run is already in progress')
+                q.put(None)
+            _job_results[job_id] = 'error: another run already in progress'
+            return
+        _post_release_running_flag['active'] = True
+
+    q = _job_queues[job_id]
+    _job_logs[job_id] = []   # buffer every line so the UI can recover after an SSE drop
+    try:
+        cmd = [sys.executable, '-u', str(BASE_DIR / 'post_release_screen_count.py')]
+        if dry_run:
+            cmd += ['--dry-run']
+        if force:
+            cmd += ['--force']
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            env=_build_env(user_creds),
+            cwd=str(BASE_DIR),
+        )
+        for line in proc.stdout:
+            line = line.rstrip()
+            print(f'[postrelease] {line}', flush=True)
+            _job_logs[job_id].append(line)
+            q.put(line)
+        proc.wait()
+        if proc.returncode == 0:
+            _job_results[job_id] = 'success'
+            q.put('__SUCCESS__')
+        else:
+            _job_results[job_id] = f'error: Post-Release script exited with code {proc.returncode}'
+            q.put(f'__ERROR__ Post-Release script exited with code {proc.returncode}')
+    except Exception as exc:
+        print(f'[postrelease] EXCEPTION: {exc}', flush=True)
+        _job_results[job_id] = f'error: {exc}'
+        q.put(f'__ERROR__ {exc}')
+    finally:
+        with _post_release_running_lock:
+            _post_release_running_flag['active'] = False
+        q.put(None)
+
+
+_POSTRELEASE_CRON_USER_EMAIL = os.getenv('POSTRELEASE_CRON_USER_EMAIL', 'tommy.gonzalez@angel.com')
+_POSTRELEASE_CRON_TZ         = zoneinfo.ZoneInfo('America/Denver')
+_POSTRELEASE_CRON_TZ_LABEL   = 'MT'
+_POSTRELEASE_CRON_WEEKDAYS   = (4,)  # Friday
+_POSTRELEASE_CRON_HOUR       = 9
+_POSTRELEASE_CRON_MINUTE     = 0
+
+
+def _post_release_next_fire(now=None):
+    import datetime as _dt
+    if now is None:
+        now = _dt.datetime.now(tz=_POSTRELEASE_CRON_TZ)
+    else:
+        now = now.astimezone(_POSTRELEASE_CRON_TZ)
+    candidates = []
+    for wd in _POSTRELEASE_CRON_WEEKDAYS:
+        days_ahead = (wd - now.weekday()) % 7
+        cand = now.replace(hour=_POSTRELEASE_CRON_HOUR, minute=_POSTRELEASE_CRON_MINUTE,
+                           second=0, microsecond=0) + _dt.timedelta(days=days_ahead)
+        if cand <= now:
+            cand += _dt.timedelta(days=7)
+        candidates.append(cand)
+    return min(candidates)
+
+
+def _post_release_next_run_info() -> dict:
+    try:
+        nxt = _post_release_next_fire()
+        fmt = '%A, %b %-d at %-I:%M %p' if os.name != 'nt' else '%A, %b %#d at %#I:%M %p'
+        return {
+            'next_run_local': nxt.strftime(fmt) + f' {_POSTRELEASE_CRON_TZ_LABEL}',
+            'next_run_iso':   nxt.isoformat(),
+        }
+    except Exception as exc:
+        return {'error': str(exc)}
+
+
+def _post_release_scheduler():
+    """Background thread: sleeps until the next Friday 9 AM MST, then fires the job (force)."""
+    import datetime as _dt
+    while True:
+        try:
+            nxt = _post_release_next_fire()
+            now = _dt.datetime.now(tz=_POSTRELEASE_CRON_TZ)
+            sleep_s = (nxt - now).total_seconds()
+            if sleep_s > 0:
+                print(f'[postrelease-cron] next fire: {nxt.isoformat()} (sleeping {sleep_s/3600:.2f}h)', flush=True)
+                while sleep_s > 0:
+                    chunk = min(sleep_s, 3600)
+                    time.sleep(chunk)
+                    sleep_s = (nxt - _dt.datetime.now(tz=_POSTRELEASE_CRON_TZ)).total_seconds()
+            print(f'[postrelease-cron] firing scheduled run at {_dt.datetime.now(tz=_POSTRELEASE_CRON_TZ).isoformat()}', flush=True)
+            try:
+                cron_user_creds = {}
+                if _db:
+                    user = _db.get_user_by_email(_POSTRELEASE_CRON_USER_EMAIL)
+                    if user:
+                        cron_user_creds = _db.get_credentials(user['id'])
+                    else:
+                        print(f'[postrelease-cron] WARNING: cron user {_POSTRELEASE_CRON_USER_EMAIL} not found in DB', flush=True)
+
+                if not cron_user_creds.get('mica_user'):
+                    print(f'[postrelease-cron] ERROR: no MICA creds for {_POSTRELEASE_CRON_USER_EMAIL}; skipping run', flush=True)
+                else:
+                    job_id = 'pr_cron_' + str(int(time.time() * 1000))
+                    _job_queues[job_id] = queue.Queue()
+                    _run_post_release(job_id, dry_run=False, user_creds=cron_user_creds, force=True)
+                    print(f'[postrelease-cron] job {job_id} result: {_job_results.get(job_id, "?")}', flush=True)
+            except Exception as exc:
+                print(f'[postrelease-cron] EXCEPTION during fire: {exc}', flush=True)
+            time.sleep(60)
+        except Exception as exc:
+            print(f'[postrelease-cron] scheduler loop error: {exc} — sleeping 5 min', flush=True)
+            time.sleep(300)
+
 
 def _run_mass_booking_plan(title: str, booking_path: Path, job_id: str, mode: str = 'demo', circuit: str = '', dry_run: bool = False):
     q = _job_queues[job_id]
@@ -2979,12 +4658,60 @@ def _watch_and_restart():
                 os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
+def _coverage_scheduler():
+    """Warm the Booking Coverage cache at startup, then refresh daily at
+    REFRESH_TIMES (default 08:00 and 13:00 local)."""
+    if _bc is None:
+        return
+    import datetime as _dt
+    slots = [s.strip() for s in os.environ.get('REFRESH_TIMES', '08:00,13:00').split(',') if s.strip()]
+    print(f"[coverage-cron] warming cache; daily refresh at {slots}", flush=True)
+    try:
+        _bc.refresh_all()
+    except Exception as e:
+        print(f"[coverage-cron] startup refresh failed: {e}", flush=True)
+    done = {}
+    while True:
+        now = _dt.datetime.now()
+        today, cur = now.strftime('%Y-%m-%d'), now.strftime('%H:%M')
+        for s in slots:
+            if cur >= s and s not in done.get(today, set()):
+                print(f"[coverage-cron] {s} refresh", flush=True)
+                try:
+                    _bc.refresh_all()
+                except Exception as e:
+                    print(f"[coverage-cron] refresh failed: {e}", flush=True)
+                done.setdefault(today, set()).add(s)
+        done = {today: done.get(today, set())}
+        time.sleep(120)
+
+
 if __name__ == '__main__':
     # Only run the watcher in the main process (not after os.execv re-entry)
     if os.environ.get('_LAUNCHER_RELOADER') != '1':
         os.environ['_LAUNCHER_RELOADER'] = '1'
     watcher = threading.Thread(target=_watch_and_restart, daemon=True)
     watcher.start()
+
+    # O Canada weekly cron — fires Friday 9:00 AM Mountain
+    ocanada_cron = threading.Thread(target=_o_canada_scheduler, daemon=True, name='ocanada-cron')
+    ocanada_cron.start()
+
+    # Daily Grosses cron — fires Tuesday 9:00 AM Mountain
+    dailygrosses_cron = threading.Thread(target=_daily_grosses_scheduler, daemon=True, name='dailygrosses-cron')
+    dailygrosses_cron.start()
+
+    # Screen Count cron — fires Wednesday + Friday 9:00 AM Mountain
+    screencount_cron = threading.Thread(target=_screen_count_scheduler, daemon=True, name='screencount-cron')
+    screencount_cron.start()
+
+    # Post-Release Screen Count cron — fires Friday 9:00 AM Mountain (force-overwrites early pulls)
+    postrelease_cron = threading.Thread(target=_post_release_scheduler, daemon=True, name='postrelease-cron')
+    postrelease_cron.start()
+
+    # Booking Coverage cron — warms cache at startup, refreshes 8am & 1pm
+    coverage_cron = threading.Thread(target=_coverage_scheduler, daemon=True, name='coverage-cron')
+    coverage_cron.start()
 
     _auto_update()
     host = '0.0.0.0' if os.getenv('SERVER_MODE') else 'localhost'

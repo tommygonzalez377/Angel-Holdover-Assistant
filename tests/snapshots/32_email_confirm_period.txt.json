@@ -1,0 +1,58 @@
+{
+  "booking": {
+    "ok": {
+      "The Brink of War": [
+        {
+          "date": "",
+          "theatre": "Crossgates"
+        },
+        {
+          "date": "",
+          "theatre": "Destiny"
+        },
+        {
+          "date": "",
+          "theatre": "Dickson City"
+        },
+        {
+          "date": "",
+          "theatre": "Harbour View"
+        },
+        {
+          "date": "",
+          "theatre": "Harrisburg"
+        },
+        {
+          "date": "",
+          "theatre": "Harrisonburg"
+        },
+        {
+          "date": "",
+          "theatre": "Ithaca"
+        },
+        {
+          "date": "",
+          "theatre": "Manor"
+        },
+        {
+          "date": "",
+          "theatre": "River Ridge"
+        },
+        {
+          "date": "",
+          "theatre": "Stonefield"
+        },
+        {
+          "date": "",
+          "theatre": "Valley View"
+        }
+      ]
+    }
+  },
+  "flash": {
+    "system_exit": "ERROR: No 'Action' or 'Policy' column found.\nColumns detected: ['Confirming', 'the', 'below', 'locations', 'for', 'now', 'on', 'The', 'Brink', 'of', 'War.', 'Unnamed: 11', 'Thank', 'you']\nTip: Copy the full table (including header row) from your booking system."
+  },
+  "holdover": {
+    "ok": []
+  }
+}

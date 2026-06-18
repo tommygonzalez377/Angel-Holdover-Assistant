@@ -1,5 +1,6 @@
 # Credentials — never commit
 .env
+creds/*.json
 
 # Generated output
 output/
@@ -21,3 +22,13 @@ solo_mio_*.csv
 Participating*.csv
 Claude\ Master\ List.xlsx
 Practice\ pic.png
+
+coverage_cache.json
+
+# Deploy token (Fly access token) — never commit
+_deploy.sh
+
+# Local debug/test artifacts
+coverage_test*.log
+coverage_test*.err
+_ui_access_check/

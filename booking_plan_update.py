@@ -256,12 +256,21 @@ def _parse_email_booking(text: str) -> dict[str, list[dict]]:
         'hi', 'hello', 'dear', 'hey', 'attached', 'see', 'per', 'as',
     }
 
-    # Match "on FILM TITLE:" or "for FILM TITLE:"
+    # Match "on FILM TITLE:" or "for FILM TITLE:" (colon — strongest signal).
     m = re.search(
         r'\b(?:on|for)\s+([A-Z][A-Za-z0-9 \'\-\(\)&\.]+?)\s*:',
         text,
         re.MULTILINE,
     )
+    if not m:
+        # Fallback: "on FILM TITLE." ending in a period, e.g. Becky Williams' style:
+        # "Confirming the below locations for now on The Brink of War.  Thank you".
+        # (No period allowed inside the title here so it stops cleanly at the sentence end.)
+        m = re.search(
+            r'\b(?:on|for)\s+([A-Z][A-Za-z0-9 \'\-\(\)&]+?)\s*\.',
+            text,
+            re.MULTILINE,
+        )
     if not m:
         return {}
 
@@ -2529,11 +2538,18 @@ _FILTER_TYPE_HINTS: dict = {
 _CONTACT_NAME_MAP: dict[str, str] = {
     "joshua wymer": "Josh Wymer",
     # Mary Ann B. Silk — accept with or without the middle initial; Mica stores
-    # her as "Mary Ann Silk", so normalize all variants to that.
-    "mary ann b. silk": "Mary Ann Silk",
-    "mary ann b silk":  "Mary Ann Silk",
-    "mary ann silk":    "Mary Ann Silk",
-    "mary ann":         "Mary Ann Silk",
+    # her WITH the middle initial as "Mary Ann B. Silk", so normalize every
+    # variant to that exact string. (Typing "Mary Ann Silk" without the "B."
+    # yields "No items found" in the ng-select, since that is not a substring of
+    # "Mary Ann B. Silk" — which silently left the plan unfiltered and matched 0.)
+    "mary ann b. silk": "Mary Ann B. Silk",
+    "mary ann b silk":  "Mary Ann B. Silk",
+    "mary ann silk":    "Mary Ann B. Silk",
+    "mary ann":         "Mary Ann B. Silk",
+    # CJ Lauderdale — email/booking says "Christopher Lauderdale" but Mica stores
+    # "CJ Lauderdale"; accept either form.
+    "christopher lauderdale": "CJ Lauderdale",
+    "cj lauderdale":          "CJ Lauderdale",
 }
 
 def _normalize_contact(name: str) -> str:
@@ -2573,21 +2589,59 @@ def _filter_by_buyer(page, contact: str, filter_type: str = "contact_person"):
         pass
     ng_sel.click()
     page.wait_for_timeout(400)
+
+    # Significant words of the full contact name (≥3 chars), used to search and to
+    # disambiguate the matching option.
+    import re as _re
+    sig_words = [w for w in _re.split(r"[^A-Za-z0-9]+", contact.lower()) if len(w) >= 3]
+    # ng-select matches on a CONTIGUOUS substring of the option label, so typing the
+    # full "First Middle. Last" string fails whenever the option is stored in a
+    # different word order or punctuation (e.g. "Last, First" → "Silk, Mary Ann B.").
+    # Search by the most distinctive single token instead — the last word ≥3 chars,
+    # usually the surname — which is a substring in EVERY ordering. Then pick the
+    # option that contains all the name's words.
+    search_term = sig_words[-1] if sig_words else contact.strip()
     inp = ng_sel.locator("input").first
     if inp.count() > 0:
-        inp.fill(contact)
+        inp.fill(search_term)
     else:
-        page.keyboard.type(contact)
-    page.wait_for_timeout(900)
-    # Click the first visible dropdown option (case-insensitive partial match)
-    opt = page.locator('.ng-option:visible, [role="option"]:visible').first
-    if opt.count() > 0:
-        opt_text = opt.inner_text().strip()
-        opt.click()
-        log(f"  Venue filter set: '{opt_text}'")
-    else:
-        log(f"  WARNING: '{contact}' not found in Contact dropdown — pressing Enter")
-        page.keyboard.press("Enter")
+        page.keyboard.type(search_term)
+
+    # Poll up to ~4s for selectable options to render. ng-select renders a disabled
+    # ".ng-option-disabled" placeholder reading "No items found" when nothing matches;
+    # exclude it so a real miss surfaces as a loud WARNING instead of a no-op click
+    # that masquerades as success (which left the plan unfiltered → default 100 venues).
+    opt_loc = page.locator(
+        '.ng-option:visible:not(.ng-option-disabled), '
+        '[role="option"]:visible:not([aria-disabled="true"])'
+    )
+    options: list[str] = []
+    for _ in range(20):
+        page.wait_for_timeout(200)
+        if opt_loc.count() > 0:
+            options = [t.strip() for t in opt_loc.all_inner_texts() if t.strip()]
+            if options:
+                break
+
+    if not options:
+        log(f"  WARNING: '{contact}' not found in {filter_type} dropdown "
+            f"(searched '{search_term}', ng-select shows 'No items found') — plan is "
+            f"UNFILTERED, venue matching will be unreliable. Check the exact name in Mica.")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(1_000)
+        return
+
+    # Choose the option containing the MOST of the contact's significant words; on a
+    # tie keep the first. Falls back to the first option when nothing scores (>0).
+    def _score(o: str) -> int:
+        ol = o.lower()
+        return sum(1 for w in sig_words if w in ol)
+    best_i = max(range(len(options)), key=lambda i: _score(options[i]))
+    if _score(options[best_i]) == 0:
+        best_i = 0
+    chosen = options[best_i]
+    opt_loc.nth(best_i).click()
+    log(f"  Venue filter set: '{chosen}' (searched '{search_term}')")
     page.wait_for_timeout(1_500)
 
 

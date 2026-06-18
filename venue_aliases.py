@@ -89,11 +89,26 @@ CITY_VENUE_ALIASES: dict[str, str] = {
     "southroads 20":            "Southroads Tulsa 20",
     "foothills 15":             "Foothills Tucson 15",
     "surprise 14":              "Surprise Pointe 14",
+    # Regal/Debbie Pennie (Regal LA) — booking name differs from Mica venue name
+    "regal sherman oaks galleria":   "Regal Sherman Oaks 16",
+    "sherman oaks galleria":         "Regal Sherman Oaks 16",
     # Regal/Becky Williams — "Stm" suffix stripped by STOP, but these need city disambiguation
     "champlain centre stm 8":        "Champlain Plattsburgh 8",
     "e. greenbush 8":                "East Greenbush 8",
     "aviation mall 9":               "Aviation Mall Queensbury 9",
     "manor stm 16":                  "Regal Manor Cinema Lancaster 16",
+    # Becky Williams email-confirmation short names (bare city/mall names → Mica venues)
+    "crossgates":                    "Regal Crossgates 18",
+    "ithaca":                        "Regal Ithaca Mall Stadium 14",
+    "destiny":                       "Regal Destiny Mall Cinema Syracuse 17",
+    "stonefield":                    "Regal Stonefield Stadium 14",
+    "harrisonburg":                  "Regal Harrisonburg 14",
+    "valley view":                   "Regal Valley View Grande Roanoke 16",
+    "river ridge":                   "Regal River Ridge Stadium Lynchburg 14",
+    "harbour view":                  "Regal Harbour View Grande Suffolk 16",
+    "dickson city":                  "Regal Dickson City 13",
+    "manor":                         "Regal Manor Cinema Lancaster 16",
+    "harrisburg":                    "Regal Harrisburg 14",
     "new river valley stm 14 & rpx": "Regal New River Valley Christiansburg 14",
     "west manchester stm 13":        "Regal West Manchester York 13",
     "destiny usa stm 19 imax & rpx": "Regal Destiny Mall Cinema Syracuse 17",
@@ -116,6 +131,9 @@ CITY_VENUE_ALIASES: dict[str, str] = {
     "village park cinema stm 17":    "Regal Village Park Carmel 17",
     # Daniel Worsham (Regal GA/TN/KY/SC circuit)
     "clarksville stm 16 & rpx":      "Regal Clarksville 16",
+    "tullahoma cinemas 8":           "Regal Cinema Tullahoma 8",
+    "hollywood 15":                  "Regal Hollywood Gainesville 15",
+    "mcdonough stm 16":              "Regal McDonough 16",
     # Alanna Peffley (Regal FL/VA/NC circuit)
     "regal dania point 4dx rpx &vip":    "Regal Dania Pointe 16",
     "regal dania point 4dx rpx & vip":   "Regal Dania Pointe 16",
@@ -130,6 +148,18 @@ CITY_VENUE_ALIASES: dict[str, str] = {
     "stockton cty ctr stm 16 & imax":"Stockton City Center 16",
     "el dorado stm 14 & imax":       "Regal El Dorado Hills 14",
     "hacienda stm 20 imax & rpx":    "Regal Hacienda Crossings Dublin 20 & IMAX",
+    # "Ukiah Stm 6" reduces to one sig word ("ukiah") after STOP-stripping "stm"+"6",
+    # below the 2-word match threshold → needs an explicit alias to the Mica name.
+    "ukiah stm 6":                   "Regal Ukiah 6",
+    # Regal/Jamie Munsey (Regal Knoxville TN) — "stm" + circuit words (imax/rpx) strip
+    # these down to one sig word ("pinnacle"/"riviera"), below threshold → explicit alias.
+    "pinnacle stm 18 imax & rpx":    "Regal Pinnacle Knoxville 18 & IMAX",
+    "riviera stm 8":                 "Regal Riviera Stadium Knoxville 8",
+    # Regal/Ramona Channel (Regal FL/MO/LA/AL) — "stm"+brand strip to one sig word;
+    # "Bdwalk" also doesn't match "Boardwalk" → explicit alias to the exact Mica name.
+    "avenues stm 20 & rpx":          "Regal Avenues Jacksonville 20",
+    "louisiana bdwalk stm 14 & imax":"Regal Louisiana Boardwalk Bossier City 14",
+    "westbrook 4":                   "Regal Westbrook Brookhaven 4",
     # Regal/Christopher Lauderdale — stm-only sig-word venues need city disambiguation
     "auburn stm 17":                "Auburn Stadium 17",
     "bridgeport stm 18 & imax":     "Bridgeport Tigard 18",
@@ -139,6 +169,14 @@ CITY_VENUE_ALIASES: dict[str, str] = {
     "movies on tv stm 16":          "Movies Hillsboro 16",
     "santiam stm 11":               "Santiam Salem 11",
     "stark street stm 10":          "Stark Gresham 10",
+    # "Longston Place" (booking) vs "Longston Puyallup" (Mica) — only "longston" overlaps.
+    "longston place stm 14":        "Regal Longston Puyallup 14",
+    # Regal/Joseph Ranallo (Regal TX/OK/KS circuit) — bare "Stm" names reduce to one sig
+    # word after STOP-stripping "stm"+screen#; Mica adds the city → below MIN_SCORE=2.
+    "southwind stm 12":             "Regal Southwind Lawrence 12",
+    "spotlight stm 14":             "Regal Spotlight Norman 14",
+    "killeen stm 14":               "Regal Killeen Stadium 14",
+    "star stm 12":                  "Regal Star Beaumont 12",
     # Clarence Chiu (Regal Pacific NW / LA / NV circuit)
     "aliante stm 16 & imax":           "Regal Aliante N Las Vegas 16",
     "barkley vlg stm 16 imax & rpx":  "Regal Barkley Village Bellingham 16 IMAX & RPX",
@@ -559,6 +597,7 @@ CITY_VENUE_ALIASES: dict[str, str] = {
     'fox stm 16 & imax':  'Regal Fox Ashburn 16',
     'hadley theatre stm 16':  'Regal Hadley Cinemas South Plainfield 16',
     'kingstowne stm 16 & rpx':  'Regal Kingstowne Cinema 16',
+    'westview stm 16 & imax':  'Regal Westview Frederick 16',
     'laurel towne centre 12':  'Regal Laurel Town Center 12',
     'movies 16, gahanna':  'cinemark stoneridge plaza movies 16',
     'norton ks':  'norton theatre',
@@ -568,6 +607,11 @@ CITY_VENUE_ALIASES: dict[str, str] = {
     'valley mall stm 16':  'Regal Valley Mall Hagerstown 16',
     'w. des moines jordan creek + xd':  'cinemark century 20 jordan creek and xd',
     'washington township 14':  'Regal Washington Township Sewell 14',
+    # Brandon Corrier (Regal PA/NJ/NY) — "Northampton Cinema 14 & RPX" strips to one
+    # sig word (cinema=STOP, rpx=circuit) → needs explicit alias to the Easton venue.
+    'northampton cinema 14 & rpx':  'Regal Northampton Easton 14',
+    # Russell Deaver (Regal NY/New England) — "Cntr" abbrev doesn't match "Center".
+    'transit cntr stm 18 & imax':   'Regal Transit Center Cinema 18',
 
     # ── Jeff Kaufman / Malco Theatres (added 2026-05-15) ──────────────────────
     # Holdover tab; Contact Person = "Jeff Kaufman"

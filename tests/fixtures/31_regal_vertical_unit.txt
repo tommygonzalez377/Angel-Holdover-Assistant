@@ -1,0 +1,65 @@
+Buyer
+Br
+Unit
+Theatre
+Film
+Type
+Media
+Prt
+Action
+Header
+Russell Deaver
+BU
+1730
+Arnot Mall 10
+SMX26: David
+H/O
+2D
+1
+Final 06/11
+Buyer
+1
+Russell Deaver
+NY
+0558
+Nanuet Stm 12 & RPX
+SMX26: David
+H/O
+2D
+1
+Final 06/11
+Buyer
+2
+Russell Deaver
+NY
+0632
+Ronkonkoma Stm 9
+SMX26: David
+H/O
+2D
+1
+Final 06/11
+Buyer
+3
+Russell Deaver
+BO
+1467
+MGM Springfield 7
+SMX26: David
+H/O
+2D
+1
+Final 06/11
+Buyer
+4
+Russell Deaver
+BU
+0294
+Transit Cntr Stm 18 & IMAX
+SMX26: David
+H/O
+2D
+1
+Final 06/11
+Buyer
+#

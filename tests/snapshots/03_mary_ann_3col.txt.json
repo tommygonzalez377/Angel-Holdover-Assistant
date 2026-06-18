@@ -29,11 +29,13 @@
     "ok": [
       {
         "Action": "Final",
-        "Theatre": "Aberdeen\tAnimal Farm"
+        "Film": "Animal Farm",
+        "Theatre": "Aberdeen"
       },
       {
         "Action": "Final",
-        "Theatre": "Bluefield\tAnimal Farm"
+        "Film": "Animal Farm",
+        "Theatre": "Bluefield"
       }
     ]
   },

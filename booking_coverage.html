@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Booking Coverage</title>
+<style>
+  :root{ --bg:#0a0a14; --card:rgba(255,255,255,0.04); --bd:rgba(255,255,255,0.10);
+         --txt:#f3f4f6; --mut:#9aa0aa; --dim:#676d77; --cyan:#00bcd4;
+         --green:#34d399; --amber:#fbbf24; --red:#f87171; --gray:#8b919b; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--txt);
+        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:14px; }
+  .wrap{ max-width:1100px; margin:0 auto; padding:24px; }
+  h1{ font-size:1.35rem; font-weight:700; margin:0; }
+  .sub{ color:var(--mut); font-size:0.85rem; margin-top:2px; }
+  .controls{ display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin:20px 0 24px; }
+  label{ display:block; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--dim); margin-bottom:5px; }
+  select,input[type=date]{ background:#11131c; color:var(--txt); border:1px solid var(--bd);
+        border-radius:8px; padding:8px 10px; font-size:0.9rem; }
+  button{ background:var(--cyan); color:#06121a; border:none; border-radius:8px; padding:9px 18px;
+        font-weight:700; font-size:0.9rem; cursor:pointer; }
+  button:disabled{ opacity:0.5; cursor:default; }
+  .kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; margin-bottom:22px; }
+  .kpi{ background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:14px 16px; }
+  .kpi .l{ font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--dim); }
+  .kpi .v{ font-size:1.7rem; font-weight:700; margin-top:4px; }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:22px; }
+  .panel{ background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:16px 18px; }
+  .panel h2{ font-size:0.95rem; font-weight:600; margin:0 0 14px; }
+  .bar-row{ margin-bottom:11px; }
+  .bar-row .top{ display:flex; justify-content:space-between; font-size:0.82rem; margin-bottom:4px; }
+  .track{ height:8px; background:rgba(255,255,255,0.07); border-radius:4px; overflow:hidden; }
+  .fill{ height:8px; border-radius:4px; }
+  table{ width:100%; border-collapse:collapse; font-size:0.84rem; }
+  th{ text-align:left; color:var(--dim); font-weight:500; font-size:0.72rem; text-transform:uppercase;
+        letter-spacing:0.05em; padding:6px 8px; border-bottom:1px solid var(--bd); }
+  td{ padding:8px; border-bottom:1px solid rgba(255,255,255,0.05); }
+  td.r,th.r{ text-align:right; }
+  .pill{ display:inline-block; padding:2px 9px; border-radius:20px; font-size:0.72rem; font-weight:600; }
+  .f-on_track{ background:rgba(52,211,153,0.15); color:var(--green); }
+  .f-under{ background:rgba(251,191,36,0.15); color:var(--amber); }
+  .f-no_show{ background:rgba(248,113,113,0.15); color:var(--red); }
+  .f-unresolved{ background:rgba(139,145,155,0.15); color:var(--gray); }
+  .f-expected{ background:rgba(120,170,220,0.16); color:#9cc4ec; }
+  .tag{ display:inline-block; padding:2px 8px; border-radius:6px; font-size:0.7rem;
+    background:rgba(255,255,255,0.06); color:var(--mut); border:1px solid var(--bd); margin:1px 2px 1px 0; }
+  .filters{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:4px 0 12px; }
+  .chip{ padding:5px 12px; border:1px solid var(--bd); border-radius:20px; font-size:0.78rem;
+        cursor:pointer; color:var(--mut); user-select:none; }
+  .chip.active{ background:var(--cyan); color:#06121a; border-color:var(--cyan); font-weight:600; }
+  #search{ flex:1; min-width:160px; background:#11131c; border:1px solid var(--bd); color:var(--txt);
+        border-radius:8px; padding:7px 10px; font-size:0.85rem; }
+  .muted{ color:var(--dim); font-size:0.78rem; }
+  .empty{ color:var(--mut); padding:24px; text-align:center; }
+  tr.expandable{ cursor:pointer; }
+  tr.expandable:hover td{ background:rgba(255,255,255,0.03); }
+  .caret{ color:var(--cyan); font-size:0.7rem; display:inline-block; width:11px; }
+  tr.detail td{ background:rgba(0,0,0,0.22); padding:0; }
+  .detail-wrap{ padding:12px 16px; }
+  .day{ margin-bottom:12px; }
+  .day-h{ font-weight:600; font-size:0.82rem; color:var(--txt); border-bottom:1px solid var(--bd); padding-bottom:4px; margin-bottom:7px; }
+  .day-grid{ display:grid; grid-template-columns:1fr 1fr; gap:4px 28px; max-width:560px; }
+  .st{ font-size:0.82rem; color:var(--green); }
+  .st .sold{ color:var(--mut); }
+  .dl{ padding:12px 16px; color:var(--mut); font-size:0.82rem; }
+  .popover{ position:absolute; z-index:50; background:#161a24; border:1px solid rgba(255,255,255,0.16);
+    border-radius:12px; box-shadow:0 16px 48px rgba(0,0,0,0.6); width:600px; max-width:92vw;
+    max-height:62vh; overflow:auto; }
+  .pop-h{ display:flex; justify-content:space-between; align-items:center; gap:12px;
+    padding:11px 16px; border-bottom:1px solid var(--bd); position:sticky; top:0; background:#161a24; }
+  .pop-h .pv{ font-weight:600; font-size:0.9rem; }
+  .pop-h .pm{ color:var(--mut); font-size:0.78rem; }
+  .pop-x{ cursor:pointer; color:var(--mut); font-size:1.3rem; line-height:1; padding:0 2px; }
+  .pop-x:hover{ color:var(--txt); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
+    <div>
+      <h1>Booking coverage</h1>
+      <div class="sub">Committed in Mica vs. actual scheduled showtimes</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div><label>Title</label><select id="title"></select></div>
+    <div><label>Week start</label><input type="date" id="start"></div>
+    <div><label>Week end</label><input type="date" id="end"></div>
+    <button id="run">Refresh</button>
+    <span id="status" class="muted"></span>
+    <span class="muted" style="margin-left:6px;">· auto-refreshes 8am &amp; 1pm</span>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h2>What the flags mean</h2>
+      <div style="font-size:0.84rem; line-height:1.85; color:var(--mut);">
+        <div><span class="pill f-no_show">No-show</span> &nbsp;Agreed, venue known, <b>0</b> showtimes, no explaining tag</div>
+        <div><span class="pill f-under">Under</span> &nbsp;Scheduling, but &le;3 days or &le;10 showtimes</div>
+        <div><span class="pill f-on_track">On track</span> &nbsp;Full slate for a Clean commitment</div>
+        <div><span class="pill f-expected">Expected</span> &nbsp;0 showtimes, but a tag explains it</div>
+        <div><span class="pill f-unresolved">Unresolved</span> &nbsp;Venue not matched — can't confirm</div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Venue tags</h2>
+      <div style="font-size:0.84rem; line-height:1.7; color:var(--mut);">
+        From Oracle — these flag online-ticketing limits and move a venue from
+        <span class="pill f-no_show">No-show</span> → <span class="pill f-expected">Expected</span>:
+        <div style="margin-top:8px;">
+          <span class="tag">no-online-sales</span><span class="tag">no-website</span><span class="tag">no-showtimes</span><span class="tag">no-early-showtimes</span><span class="tag">1-week-out-venue</span><span class="tag">2-week-out-venue</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="margin:0;">Venue detail</h2>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span class="muted" id="vcount"></span>
+        <button id="export" style="padding:6px 14px; font-size:0.85rem;">Export to Excel</button>
+      </div>
+    </div>
+    <div class="filters">
+      <select id="flag" style="width:auto;">
+        <option value="all">All statuses</option>
+        <option value="no_show">No-shows</option>
+        <option value="under">Under</option>
+        <option value="expected">Expected</option>
+        <option value="on_track">On track</option>
+        <option value="unresolved">Unresolved</option>
+      </select>
+      <select id="booker" style="width:auto;"><option value="">All bookers</option></select>
+      <input id="search" placeholder="Search venue or buyer…">
+    </div>
+    <table>
+      <thead><tr><th>Venue</th><th>City</th><th>State</th><th>Booker</th><th>Buyer</th><th>Playtype</th><th class="r">Screens</th>
+        <th class="r">Showtimes</th><th class="r">Days</th><th class="r">Flag</th><th>Tags</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+let DATA = null, FILTER = "all", BOOKER = "", STCACHE = {};
+const $ = s => document.querySelector(s);
+const fmt = n => (n==null?0:n).toLocaleString();
+const addDays = (iso, d) => { const x=new Date(iso+'T00:00:00'); x.setDate(x.getDate()+d); return x.toISOString().slice(0,10); };
+
+async function loadTitles(){
+  const ts = await fetch('/api/titles').then(r=>r.json());
+  const sel = $('#title'); sel.innerHTML='';
+  ts.forEach(t=>{ const o=document.createElement('option'); o.value=t.slug; o.textContent=t.name; o.dataset.start=t.start_date||''; sel.appendChild(o); });
+  syncWindow();
+}
+function syncWindow(){
+  const opt = $('#title').selectedOptions[0];
+  const s = opt && opt.dataset.start ? opt.dataset.start : new Date().toISOString().slice(0,10);
+  $('#start').value = s; $('#end').value = addDays(s, 6);
+}
+function fmtTime(iso){ try{ return new Date(iso).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(e){ return ''; } }
+async function run(force){
+  const slug=$('#title').value, start=$('#start').value, end=$('#end').value;
+  if(!slug) return;
+  $('#run').disabled=true; $('#status').textContent = force ? 'Refreshing…' : 'Loading…';
+  try{
+    const url = `/api/coverage?slug=${encodeURIComponent(slug)}&start=${start}&end=${end}` + (force?'&force=1':'');
+    DATA = await fetch(url).then(r=>r.json());
+    if(DATA.error){ $('#status').textContent='Error: '+DATA.error; return; }
+    render();
+    $('#status').textContent = DATA.generated_at ? ('Updated '+fmtTime(DATA.generated_at)) : 'Updated';
+  }catch(e){ $('#status').textContent='Error: '+e; }
+  finally{ $('#run').disabled=false; }
+}
+function render(){
+  STCACHE = {};
+  const k=DATA.kpis;
+  $('#kpis').innerHTML = [
+    ['Agreed venues', fmt(k.agreed), 'var(--txt)'],
+    ['Scheduled', fmt(k.scheduled)+' · '+k.scheduled_pct+'%', 'var(--green)'],
+    ['No-shows', fmt(k.no_show), 'var(--red)'],
+    ['Under-running', fmt(k.under), 'var(--amber)'],
+    ['Expected', fmt(k.expected), '#9cc4ec'],
+    ['Unresolved', fmt(k.unresolved), 'var(--gray)'],
+  ].map(([l,v,c])=>`<div class="kpi"><div class="l">${l}</div><div class="v" style="color:${c}">${v}</div></div>`).join('');
+
+  const bookers = [...new Set(DATA.venues.map(v=>v.booker).filter(Boolean))].sort();
+  const sel=$('#booker'), prev=sel.value;
+  sel.innerHTML = '<option value="">All bookers</option>' + bookers.map(b=>`<option>${b}</option>`).join('');
+  sel.value = bookers.includes(prev) ? prev : '';
+  BOOKER = sel.value;
+
+  renderRows();
+}
+function renderRows(){
+  const q=$('#search').value.trim().toLowerCase();
+  let rows = DATA.venues.filter(v=> FILTER==='all' || v.flag===FILTER);
+  if(BOOKER) rows = rows.filter(v=> v.booker===BOOKER);
+  if(q) rows = rows.filter(v=> ((v.venue||'')+' '+(v.city||'')+' '+(v.state||'')+' '+(v.buyer||'')+' '+(v.buyer_email||'')).toLowerCase().includes(q));
+  const order={no_show:0,under:1,expected:2,unresolved:3,on_track:4};
+  rows.sort((a,b)=> (order[a.flag]-order[b.flag]) || (b.screens||0)-(a.screens||0));
+  $('#vcount').textContent = fmt(rows.length)+' of '+fmt(DATA.venues.length)+' venues';
+  const lbl={no_show:'No-show',under:'Under',on_track:'On track',expected:'Expected',unresolved:'Unresolved'};
+  const esc = s => (s||'').replace(/"/g,'&quot;');
+  const canExpand = v => (v.flag==='on_track'||v.flag==='under') && v.pvid;
+  $('#rows').innerHTML = rows.slice(0,500).map(v=>{
+    const exp = canExpand(v);
+    const caret = exp ? '<span class="caret">▸</span>' : '<span class="caret"></span>';
+    const tags = (v.tags||[]).map(t=>`<span class="tag">${t}</span>`).join('');
+    const buyer = v.buyer ? (v.buyer_email ? `<span title="${esc(v.buyer_email)}">${v.buyer}</span>` : v.buyer) : '';
+    return `<tr class="${exp?'expandable':''}" data-pvid="${esc(v.pvid)}">
+    <td>${caret} ${v.venue||''}</td><td>${v.city||''}</td><td>${v.state||''}</td><td>${v.booker||''}</td><td>${buyer}</td><td>${v.playtype||''}</td>
+    <td class="r">${v.screens??''}</td><td class="r">${v.showtimes}</td><td class="r">${v.days}</td>
+    <td class="r"><span class="pill f-${v.flag}">${lbl[v.flag]}</span></td><td>${tags}</td></tr>`;
+  }).join('') || '<tr><td colspan="11" class="empty">No venues match.</td></tr>';
+}
+function renderDays(days){
+  if(!days || !days.length) return '<div class="dl">No showtimes in window.</div>';
+  return '<div class="detail-wrap">'+days.map(d=>
+    `<div class="day"><div class="day-h">${d.date_label}</div><div class="day-grid">`+
+    d.items.map(it=>`<div class="st">${it.time}${it.sold!=null?` · <span class="sold">${it.sold}% sold</span>`:''}</div>`).join('')+
+    '</div></div>').join('')+'</div>';
+}
+async function toggleDetail(tr){
+  const pvid = tr.dataset.pvid; if(!pvid) return;
+  const caret = tr.querySelector('.caret');
+  if(tr.nextElementSibling && tr.nextElementSibling.classList.contains('detail')){
+    tr.nextElementSibling.remove(); if(caret) caret.textContent='▸'; return;
+  }
+  const slug=$('#title').value, start=$('#start').value, end=$('#end').value;
+  const detail=document.createElement('tr'); detail.className='detail';
+  const td=document.createElement('td'); td.colSpan=11; td.innerHTML='<div class="dl">Loading showtimes…</div>';
+  detail.appendChild(td); tr.after(detail); if(caret) caret.textContent='▾';
+  try{
+    let days = STCACHE[pvid];
+    if(!days){ days = await fetch(`/api/showtimes?slug=${encodeURIComponent(slug)}&start=${start}&end=${end}&pvid=${encodeURIComponent(pvid)}`).then(r=>r.json()); STCACHE[pvid]=days; }
+    td.innerHTML = renderDays(days);
+  }catch(e){ td.innerHTML='<div class="dl">Error loading showtimes.</div>'; }
+}
+$('#rows').addEventListener('click', e=>{ const tr=e.target.closest('tr.expandable'); if(tr) toggleDetail(tr); });
+
+$('#flag').onchange = ()=>{ FILTER=$('#flag').value; renderRows(); };
+$('#search').oninput = renderRows;
+$('#booker').onchange = ()=>{ BOOKER=$('#booker').value; renderRows(); };
+$('#export').onclick = ()=>{
+  const slug=$('#title').value, start=$('#start').value, end=$('#end').value;
+  if(!slug) return;
+  const p=new URLSearchParams({slug, start, end});
+  if(FILTER && FILTER!=='all') p.set('flag', FILTER);
+  if(BOOKER) p.set('booker', BOOKER);
+  const qv=$('#search').value.trim(); if(qv) p.set('q', qv);
+  const a=document.createElement('a'); a.href='/api/export?'+p.toString();
+  document.body.appendChild(a); a.click(); a.remove();
+};
+$('#title').onchange = ()=>{ syncWindow(); run(false); };
+$('#run').onclick = ()=>run(true);
+(async()=>{
+  for(let i=0;i<4;i++){ try{ await loadTitles(); break; }
+    catch(e){ $('#status').textContent='Connecting…'; await new Promise(r=>setTimeout(r,800)); } }
+  run(false);
+})();
+</script>
+</body>
+</html>

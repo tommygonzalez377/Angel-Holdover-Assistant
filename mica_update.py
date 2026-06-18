@@ -1546,6 +1546,8 @@ def parse_booking_csv(path: Path) -> list[dict]:
                 elif _act_raw_ma == 'hold':
                     _action_ma = 'Hold'
                 else:
+                    # "Open" (newly opening) gets NO action on the Holdover page — per
+                    # Tommy, an opening already shows up as "New" in holdovers on its own.
                     continue
                 results.append({"theatre": _theatre_ma, "city": "", "action": _action_ma,
                                  "film": _film_ma, "phrase": "", "screening_type": None})
@@ -1899,8 +1901,9 @@ def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo", filt
                         entry = [{"theatre": t["theatre"], "film": t.get("film",""), "city": t.get("city","")}]
                         _set_playdays_per_row(page, entry, mod, contact=contact)
 
-            # ---------- Holds (one row at a time: status → screening type → playdays) ----------
+            # ---------- Holds (done AFTER Finals: bulk status, then screening types) ----------
             if holds:
+                hold_entries = [{"theatre": t["theatre"], "film": t.get("film", ""), "city": t.get("city", "")} for t in holds]
                 log(f"\n--- Holds ({len(holds)}) ---")
                 for t in holds:
                     film_label = f"  [{t['film']}]" if t.get("film") else ""
@@ -1908,23 +1911,34 @@ def run_mica_update(contact: str, theatres: list[dict], mode: str = "demo", filt
                     mod_label = f"  [days:{t['playday_modifier']}]" if t.get("playday_modifier") else ""
                     log(f"  {t['theatre']}{film_label}  [{t['phrase']}]  -> {label}{mod_label}")
 
-                hold_updated = 0
-                for t in holds:
-                    entry = [{"theatre": t["theatre"], "film": t.get("film", ""), "city": t.get("city", "")}]
-                    n = _set_status_per_row(page, entry, "Hold", contact=contact)
-                    if n > 0:
-                        hold_updated += n
-                        st = t["screening_type"]  # None = default Clean — no Bulk Change needed
-                        if st:
-                            _set_screening_type_per_row(page, entry, st, contact=contact)
-                        # Apply playday modifier if present (e.g. F TU → uncheck We/Th)
-                        mod = t.get("playday_modifier")
-                        if mod:
-                            _set_playdays_per_row(page, entry, mod, contact=contact)
+                # Per-row Hold status (reliable). NOTE: _set_status_bulk is kept in the
+                # file but UNUSED — Mica's bulk 'Set status' confirm modal couldn't be
+                # driven reliably blind; needs interactive debugging before re-enabling.
+                hold_updated = _set_status_per_row(page, hold_entries, "Hold", contact=contact)
                 if hold_updated == 0:
                     log("  WARNING: No matching rows updated for Holds")
                 else:
-                    log(f"  Holds updated: {hold_updated} rows")
+                    log(f"  Status -> Hold  OK ({hold_updated} rows)")
+
+                # 2) Screening types — group holds by type, one Bulk Change per type
+                #    (None = default Clean, no change needed). The helper re-finds rows
+                #    fresh, so it tolerates the reorder from the status change.
+                _holds_by_type: dict[str, list[dict]] = {}
+                for t in holds:
+                    st = t.get("screening_type")
+                    if st:
+                        _holds_by_type.setdefault(st, []).append(
+                            {"theatre": t["theatre"], "film": t.get("film", ""), "city": t.get("city", "")})
+                for st, ents in _holds_by_type.items():
+                    log(f"  Screening type -> {st} for {len(ents)} row(s) ...")
+                    _set_screening_type_per_row(page, ents, st, contact=contact)
+
+                # 3) Playday modifiers (rare, e.g. F TU → uncheck We/Th) — per row
+                for t in holds:
+                    mod = t.get("playday_modifier")
+                    if mod:
+                        entry = [{"theatre": t["theatre"], "film": t.get("film", ""), "city": t.get("city", "")}]
+                        _set_playdays_per_row(page, entry, mod, contact=contact)
 
             log("\nMica update complete!")
             _screenshot(page, "mica_done.png")
@@ -2185,11 +2199,18 @@ _FILTER_TYPE_LABELS: dict[str, list[str]] = {
 _CONTACT_NAME_MAP: dict[str, str] = {
     "joshua wymer": "Josh Wymer",
     # Mary Ann B. Silk — accept with or without the middle initial; Mica stores
-    # her as "Mary Ann Silk", so normalize all variants to that.
-    "mary ann b. silk": "Mary Ann Silk",
-    "mary ann b silk":  "Mary Ann Silk",
-    "mary ann silk":    "Mary Ann Silk",
-    "mary ann":         "Mary Ann Silk",
+    # her WITH the middle initial as "Mary Ann B. Silk", so normalize every
+    # variant to that exact string. (Typing "Mary Ann Silk" without the "B."
+    # yields "No items found" in the ng-select, since that is not a substring of
+    # "Mary Ann B. Silk" — which silently left the plan unfiltered and matched 0.)
+    "mary ann b. silk": "Mary Ann B. Silk",
+    "mary ann b silk":  "Mary Ann B. Silk",
+    "mary ann silk":    "Mary Ann B. Silk",
+    "mary ann":         "Mary Ann B. Silk",
+    # CJ Lauderdale — email/booking says "Christopher Lauderdale" but Mica stores
+    # "CJ Lauderdale"; accept either form.
+    "christopher lauderdale": "CJ Lauderdale",
+    "cj lauderdale":          "CJ Lauderdale",
 }
 
 def _normalize_contact(name: str) -> str:
@@ -2589,58 +2610,63 @@ def _click_bulk_change(page) -> bool:
         return False
 
 
+_STATUS_MODAL = ('.modal.show:has-text("Change status"), '
+                 'ngb-modal-window:has-text("Change status")')
+
+
 def _bulk_set_status(page, status: str):
     """
-    Set status via the toolbar 'Status ▼' dropdown (NOT the Bulk Change modal).
-
-    Observed UI flow (from walkthrough):
-      1. Rows selected → toolbar shows 'Status ▼' button
-      2. Click 'Status ▼' → dropdown appears with Hold / Final / To Do etc.
-      3. Click the desired status option
-      4. Confirmation dialog: 'Change status to `Hold`' → click Continue
+    Bulk 'Set status' via the toolbar Status dropdown (rows must already be selected).
+    Exact UI flow (confirmed from screenshots):
+      1. Click the toolbar 'Status' dropdown button.
+      2. Click the '{status} (N)' option in the dropdown.
+      3. In the 'Set status' modal ("Change status to `{status}`") click 'Continue'.
+      4. Wait for the modal to CLOSE — this proves the update was actually submitted.
+    Raises on any failure so the caller (_set_status_bulk) falls back to per-row.
     """
-    # Click the Status dropdown button in the toolbar
-    status_btn = page.locator('button:has-text("Status")').first
+    # Clear any stray leftover modal/backdrop (NOT the status-confirm modal) so it can't
+    # intercept clicks or be mistaken for the confirm modal.
+    page.evaluate("""() => {
+        document.querySelectorAll('ngb-modal-window').forEach(m => {
+            const t = m.textContent || '';
+            if (!t.includes('Change status') && !t.includes('Edit Screenings')) m.remove();
+        });
+        document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+        document.body.classList.remove('modal-open');
+    }""")
+    page.wait_for_timeout(150)
+
+    # 1. Toolbar 'Status' dropdown toggle — the .btn-status button, NOT the "Set status" label.
+    status_btn = page.locator(
+        'button.btn-status, [ngbdropdowntoggle].btn-status, button.dropdown-toggle:has-text("Status")'
+    ).first
     if status_btn.count() == 0:
-        log(f"  WARNING: 'Status' dropdown button not found in toolbar")
-        return
-    status_btn.click()
-    page.wait_for_timeout(500)
+        status_btn = page.locator('button:has-text("Status")').first
+    status_btn.click(timeout=5_000)
+    page.wait_for_timeout(400)
 
-    # Click the matching status option.
-    # Dropdown options show "Hold (N)" / "Final (N)" — table row buttons show "Hold -" / "Final -".
-    # Matching on "{status} (" avoids accidentally clicking a table row button.
-    opt = page.locator(f'button:has-text("{status} (")').first
-    if opt.count() == 0:
-        # Fallback: try any element with the status text
-        opt = page.locator(
-            f'[role="option"]:has-text("{status}"), '
-            f'li:has-text("{status}"), '
-            f'button:has-text("{status}"), '
-            f'a:has-text("{status}")'
-        ).first
-    if opt.count() == 0:
-        log(f"  WARNING: Status option '{status}' not found in dropdown")
-        page.keyboard.press("Escape")
-        return
-    opt.click()
-    page.wait_for_timeout(500)
+    # 2. Click the '{status} (N)' option in the OPEN dropdown
+    opt = page.locator(
+        f'.dropdown-menu.show button:has-text("{status} ("), '
+        f'.dropdown-menu.show [ngbdropdownitem]:has-text("{status} ("), '
+        f'.dropdown-menu.show button:has-text("{status}"), '
+        f'button:has-text("{status} (")'
+    ).first
+    opt.click(timeout=5_000)
 
-    # Confirmation dialog: "Change status to `Hold`" → click Continue
-    confirm = page.locator('button:has-text("Continue")').first
-    if confirm.count() > 0:
-        page.wait_for_timeout(300)
-        confirm.click()
-        page.wait_for_timeout(1500)
-    else:
-        for label in ("OK", "Yes", "Confirm"):
-            alt = page.locator(f'button:has-text("{label}")').first
-            if alt.count() > 0:
-                alt.click()
-                page.wait_for_timeout(1500)
-                break
+    # 3. 'Set status' confirm modal → Continue (scoped to the modal that says
+    #    "Change status", so we never click a button behind/beside it).
+    confirm = page.locator(
+        '.modal.show:has-text("Change status") button:has-text("Continue"), '
+        'ngb-modal-window:has-text("Change status") button:has-text("Continue")'
+    ).first
+    confirm.wait_for(state="visible", timeout=6_000)
+    confirm.click(timeout=5_000)
 
+    # 4. Wait for the confirm modal to CLOSE = the bulk update was submitted.
+    page.wait_for_selector(_STATUS_MODAL, state="detached", timeout=12_000)
     _dismiss_error_popups(page)
+    page.wait_for_timeout(1_500)
 
 
 def _bulk_set_screening_type(page, screening_type: str, contact: str = ""):
@@ -3571,16 +3597,33 @@ def _scroll_table_to_render_all_rows(page) -> int:
         return 0
 
 
+def _row_status_text(page, idx: int) -> str:
+    """Return the lowercased current status shown on a row's status toggle button
+    (the first [ngbdropdowntoggle] in the row — the Holdover status). '' if not found."""
+    try:
+        return (page.evaluate("""(idx) => {
+            const rows = document.querySelectorAll('table tbody tr');
+            if (idx < 0 || idx >= rows.length) return '';
+            const btn = rows[idx].querySelector('[ngbdropdowntoggle]');
+            return btn ? btn.textContent.trim().toLowerCase() : '';
+        }""", idx)) or ''
+    except Exception:
+        return ''
+
+
 def _set_status_per_row(page, entries: list[dict], status: str, contact: str = "") -> int:
     """
     Update status by clicking each matching row's individual status button.
     Finds each row fresh per iteration so table reordering after each click is handled.
-    entries: list of {theatre, film} dicts — film is used as a tiebreaker when the
-    same theatre has rows for two different films.
-    contact: if provided, used to re-apply filter if the page navigates away mid-run.
+
+    Each change is VERIFIED (re-read the row's status after setting) and retried up to
+    3×. This fixes the earlier failure where bottom rows of a long table logged "OK"
+    but the click was intercepted by a sticky overlay and the status never stuck.
+    Returns the count of rows whose status is confirmed == `status`.
     """
-    # Ensure all rows are in the DOM (Mica may use virtual scrolling)
     _scroll_table_to_render_all_rows(page)
+    _MAX_ATTEMPTS = 3
+    _target = status.lower()
 
     count = 0
     seen: set[tuple] = set()
@@ -3594,122 +3637,253 @@ def _set_status_per_row(page, entries: list[dict], status: str, contact: str = "
             continue
         seen.add(key)
 
-        # Guard: if a prior status change redirected the browser, go back and re-filter
-        _ensure_holdovers_page(page, contact)
+        lookup_name = _apply_city_alias(name, city)
+        alias_note  = f" [alias->{lookup_name}]" if lookup_name != name else ""
+        label       = f"'{name}'{alias_note}" + (f" / '{film}'" if film else "")
 
-        # Re-find the row fresh — accounts for table reordering after previous status changes
+        verified = False
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            # Guard: if a prior status change redirected the browser, go back and re-filter
+            _ensure_holdovers_page(page, contact)
+
+            # Re-find the row fresh (table reorders as statuses change)
+            info = page.evaluate(_FIND_ONE_JS, {"name": lookup_name, "film": film})
+            idx = info["idx"]
+            if idx < 0:
+                log(f"    NO MATCH  {label} ({info.get('reason', '')})")
+                break  # can't locate the row at all — give up on this entry
+
+            # Already at the target status? (idempotent — also verifies a prior attempt)
+            cur = _row_status_text(page, idx)
+            if cur and _target in cur:
+                if attempt > 1:
+                    log(f"    VERIFIED '{status}' for {label}")
+                verified = True
+                break
+
+            if attempt == 1:
+                log(f"    MATCH  {label} -> row {idx} [venueCol={info.get('venueCol','?')}] venue='{info.get('venueText','')[:60]}'")
+            else:
+                log(f"    Retry {attempt}/{_MAX_ATTEMPTS} for {label} (status still '{cur or '?'}')")
+
+            row = page.locator("table tbody tr").nth(idx)
+            try:
+                row.scroll_into_view_if_needed(timeout=3_000)
+                page.wait_for_timeout(300)
+            except Exception:
+                pass
+
+            # Dismiss any lingering popup, and remove stray modal/backdrop that intercepts clicks
+            _dismiss_any_dialog(page)
+            page.evaluate("""() => {
+                document.querySelectorAll('ngb-modal-window').forEach(m => {
+                    if (!m.textContent.includes('Edit Screenings')) m.remove();
+                });
+                document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+                document.body.classList.remove('modal-open');
+            }""")
+            page.wait_for_timeout(200)
+
+            # Scroll the toggle to CENTER (keeps it clear of sticky header/footer overlays
+            # that intercept clicks on the top/bottom rows of a long table — the bug here)
+            status_btn = row.locator('[ngbdropdowntoggle]').first
+            _clicked = False
+            try:
+                page.evaluate("el => el.scrollIntoView({block:'center'})", status_btn.element_handle())
+                page.wait_for_timeout(300)
+                status_btn.click(force=True, timeout=5_000)
+                _clicked = True
+            except Exception as _e1:
+                log(f"    Direct click failed for {label}: {_e1} — trying JS dispatch")
+            if not _clicked:
+                try:
+                    page.evaluate(
+                        "el => el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true}))",
+                        status_btn.element_handle())
+                    _clicked = True
+                except Exception as e:
+                    log(f"    Could not click status toggle for {label}: {e} — retrying")
+                    continue
+
+            # Wait for the dropdown to open
+            try:
+                page.wait_for_selector('.dropdown-menu.show', timeout=3_000)
+            except PlaywrightTimeout:
+                try:
+                    page.keyboard.press("Enter")
+                    page.wait_for_selector('.dropdown-menu.show', timeout=2_000)
+                except PlaywrightTimeout:
+                    log(f"    Dropdown did not open for {label} — retrying")
+                    page.keyboard.press("Escape")
+                    continue
+
+            # Click the {status} option inside the open dropdown
+            opt = page.locator(
+                f'.dropdown-menu.show [ngbdropdownitem]:has-text("{status}"), '
+                f'.dropdown-menu.show button:has-text("{status}")'
+            ).first
+            if opt.count() == 0:
+                opt = page.locator(f'[ngbdropdownitem]:has-text("{status}")').first
+            if opt.count() == 0:
+                log(f"    '{status}' option not found for {label} — retrying")
+                page.keyboard.press("Escape")
+                continue
+            try:
+                opt.click(timeout=3_000)
+            except Exception as _e2:
+                log(f"    Option click failed for {label}: {_e2} — retrying")
+                page.keyboard.press("Escape")
+                continue
+            page.wait_for_timeout(400)
+
+            # PROD confirmation dialog → Continue (wait briefly for it to render)
+            try:
+                confirm = page.wait_for_selector('button:has-text("Continue")', timeout=2_000)
+                confirm.click()
+                page.wait_for_timeout(400)
+            except PlaywrightTimeout:
+                pass  # no confirmation dialog (already-set / non-prod env)
+
+            _dismiss_any_dialog(page)
+            page.wait_for_timeout(1_000)
+
+            # VERIFY the change actually stuck: re-find the row and re-read its status
+            info2 = page.evaluate(_FIND_ONE_JS, {"name": lookup_name, "film": film})
+            idx2  = info2["idx"]
+            cur2  = _row_status_text(page, idx2) if idx2 >= 0 else ''
+            if cur2 and _target in cur2:
+                verified = True
+                log(f"    OK — '{status}' set & verified for {label}")
+                break
+            log(f"    Not yet '{status}' for {label} (shows '{cur2 or '?'}') — will retry")
+
+        if verified:
+            count += 1
+        else:
+            log(f"    WARNING: could NOT set '{status}' for {label} after {_MAX_ATTEMPTS} attempts")
+
+    return count
+
+
+def _uncheck_all_rows(page):
+    page.evaluate("""() => {
+        document.querySelectorAll('table tbody tr input[type="checkbox"]:checked')
+            .forEach(cb => cb.click());
+    }""")
+    page.wait_for_timeout(250)
+
+
+def _set_status_bulk(page, entries: list[dict], status: str, contact: str = "") -> int:
+    """
+    Set the same status for MANY rows in ONE bulk action — fast, with a safety net.
+
+      1. Find each matching row (alias-aware finder, same as per-row).
+      2. Select each via a REAL mouse click on its checkbox (hover-reveal + click at
+         screen coords) so Angular registers the selection and the toolbar 'Status'
+         button ENABLES. (A JS .click did NOT enable it — that broke the first attempt;
+         hence the explicit enable-check + per-row fallback below.)
+      3. If 'Status' is enabled, bulk-set once, then VERIFY every row and clean up any
+         stragglers per-row.
+      4. If the button never enables (or nothing matched / bulk errors), FALL BACK to
+         per-row so a run is never broken.
+
+    Caller batches by outcome (all Finals, THEN all Holds). Returns rows confirmed at status.
+    """
+    _ensure_holdovers_page(page, contact)
+    _scroll_table_to_render_all_rows(page)
+    _target = status.lower()
+    _uncheck_all_rows(page)
+
+    # 1) Find matching rows (alias-aware), de-duped
+    matched: list[tuple] = []   # (idx, name, film, city)
+    seen: set[tuple] = set()
+    for entry in entries:
+        name = entry["theatre"] if isinstance(entry, dict) else entry
+        film = entry.get("film", "") if isinstance(entry, dict) else ""
+        city = entry.get("city", "") if isinstance(entry, dict) else ""
+        key  = (name, film, city)
+        if key in seen:
+            continue
+        seen.add(key)
         lookup_name = _apply_city_alias(name, city)
         info = page.evaluate(_FIND_ONE_JS, {"name": lookup_name, "film": film})
         idx = info["idx"]
         if idx < 0:
-            label = f"'{name}'" + (f" / '{film}'" if film else "")
-            log(f"    NO MATCH  {label} ({info.get('reason', '')})")
+            log(f"    NO MATCH  '{name}'" + (f" / '{film}'" if film else "") + f" ({info.get('reason', '')})")
             continue
-        alias_note = f" [alias->{lookup_name}]" if lookup_name != name else ""
-        label = f"'{name}'{alias_note}" + (f" / '{film}'" if film else "")
-        log(f"    MATCH  {label} -> row {idx} [venueCol={info.get('venueCol','?')}] venue='{info.get('venueText','')[:60]}'")
+        matched.append((idx, name, film, city))
 
+    if not matched:
+        log(f"  No rows matched for {status} — falling back to per-row.")
+        return _set_status_per_row(page, entries, status, contact=contact)
+
+    # 2) Select each matched row with a REAL mouse click (enables the Status button)
+    selected = 0
+    for idx, name, film, city in matched:
         row = page.locator("table tbody tr").nth(idx)
         try:
             row.scroll_into_view_if_needed(timeout=3_000)
-            page.wait_for_timeout(500)
-        except Exception:
-            pass
-
-        # Dismiss any lingering popup before clicking the status toggle
-        _dismiss_any_dialog(page)
-
-        # Force-remove any ngb-modal-window that intercepts pointer events.
-        # The filter modal sometimes stays in the DOM after Save and blocks all clicks.
-        page.evaluate("""() => {
-            document.querySelectorAll('ngb-modal-window').forEach(m => {
-                if (!m.textContent.includes('Edit Screenings')) m.remove();
-            });
-            document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
-            document.body.classList.remove('modal-open');
-        }""")
-        page.wait_for_timeout(200)
-
-        # Click the ng-bootstrap TOGGLE button — force=True bypasses overlay checks
-        status_btn = row.locator('[ngbdropdowntoggle]').first
-        _clicked = False
-        try:
-            page.evaluate("el => el.scrollIntoView({block:'center'})",
-                          status_btn.element_handle())
-            page.wait_for_timeout(300)
-            status_btn.click(force=True, timeout=5_000)
-            _clicked = True
-            log(f"    Clicked status toggle for '{name}' (direct)")
-        except Exception as _e1:
-            log(f"    Direct click failed for '{name}': {_e1} — trying JS dispatch")
-        if not _clicked:
-            try:
-                page.evaluate(
-                    "el => el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true}))",
-                    status_btn.element_handle())
-                _clicked = True
-                log(f"    Clicked status toggle for '{name}' (JS dispatch)")
-            except Exception as e:
-                log(f"    WARNING: Could not click status toggle for '{name}': {e}")
+            row_box = row.bounding_box()
+            if not row_box:
                 continue
+            # Hover to reveal the checkbox, then click it at its real screen coords
+            page.mouse.move(row_box['x'] + row_box['width'] * 0.05,
+                            row_box['y'] + row_box['height'] / 2)
+            page.wait_for_timeout(150)
+            cb = row.locator('input[type="checkbox"]').first
+            cb_box = cb.bounding_box() if cb.count() else None
+            if cb_box:
+                page.mouse.click(cb_box['x'] + cb_box['width'] / 2,
+                                 cb_box['y'] + cb_box['height'] / 2)
+            else:
+                cb.click(force=True)
+            selected += 1
+            page.wait_for_timeout(80)
+        except Exception as e:
+            log(f"    WARNING: could not select '{name}': {e}")
+    log(f"  Selected {selected}/{len(matched)} row(s) for bulk '{status}'.")
 
-        # Wait for dropdown to open (up to 3s) instead of blind sleep
-        dropdown_opened = False
-        try:
-            page.wait_for_selector('.dropdown-menu.show', timeout=3_000)
-            dropdown_opened = True
-        except PlaywrightTimeout:
-            log(f"    WARNING: Dropdown did not open for '{name}' — trying keyboard approach")
-            # Last resort: keyboard Enter on the focused toggle
-            try:
-                page.keyboard.press("Enter")
-                page.wait_for_selector('.dropdown-menu.show', timeout=2_000)
-                dropdown_opened = True
-                log(f"    Dropdown opened via keyboard for '{name}'")
-            except PlaywrightTimeout:
-                log(f"    WARNING: Dropdown still not open for '{name}' — skipping")
-                page.keyboard.press("Escape")
-                continue
+    # 3) Did the toolbar 'Status' button enable?
+    page.wait_for_timeout(500)
+    try:
+        status_enabled = page.locator('button:has-text("Status")').first.is_enabled(timeout=1_500)
+    except Exception:
+        status_enabled = False
 
-        # Find option scoped to the open dropdown (.dropdown-menu.show)
-        opt = page.locator(
-            f'.dropdown-menu.show [ngbdropdownitem]:has-text("{status}"), '
-            f'.dropdown-menu.show button:has-text("{status}")'
-        ).first
-        if opt.count() == 0:
-            opt = page.locator(f'[ngbdropdownitem]:has-text("{status}")').first
-        if opt.count() == 0:
-            log(f"    WARNING: '{status}' option not found in open dropdown for '{name}'")
-            page.keyboard.press("Escape")
-            continue
-        log(f"    Found '{status}' option — clicking")
-        try:
-            opt.click(timeout=3_000)
-        except Exception as _e2:
-            log(f"    WARNING: Option click failed for '{name}': {_e2}")
-            page.keyboard.press("Escape")
-            continue
-        page.wait_for_timeout(500)
+    if selected == 0 or not status_enabled:
+        log(f"  Toolbar 'Status' not enabled (selected={selected}, enabled={status_enabled}) — per-row fallback.")
+        _uncheck_all_rows(page)
+        return _set_status_per_row(page, entries, status, contact=contact)
 
-        # Confirmation dialog → Continue
-        confirm = page.locator('button:has-text("Continue")').first
-        if confirm.count() > 0:
-            log(f"    Confirming status change for '{name}'")
-            confirm.click()
-            page.wait_for_timeout(400)
+    # 4) Bulk-set once
+    log(f"  Status button enabled — bulk setting '{status}' for {selected} rows ...")
+    try:
+        _bulk_set_status(page, status)
+        page.wait_for_timeout(1_200)
+    except Exception as e:
+        log(f"  Bulk set failed ({e}) — per-row fallback.")
+        _uncheck_all_rows(page)
+        return _set_status_per_row(page, entries, status, contact=contact)
+    _uncheck_all_rows(page)
+
+    # 5) Verify every matched row; clean up any stragglers per-row
+    confirmed = 0
+    stragglers: list[dict] = []
+    for idx, name, film, city in matched:
+        lookup_name = _apply_city_alias(name, city)
+        info = page.evaluate(_FIND_ONE_JS, {"name": lookup_name, "film": film})
+        idx2 = info["idx"]
+        cur  = _row_status_text(page, idx2) if idx2 >= 0 else ''
+        if cur and _target in cur:
+            confirmed += 1
         else:
-            log(f"    No confirmation dialog for '{name}' (may already be set or demo env)")
+            stragglers.append({"theatre": name, "film": film, "city": city})
 
-        # Dismiss the Numero error dialog (btn-close ✕) and any other benign popups.
-        # _dismiss_any_dialog is scoped to [role="dialog"] so it cannot navigate away.
-        _dismiss_any_dialog(page)
-
-        # Wait for table to stabilise before finding the next row
-        page.wait_for_timeout(1_500)
-        count += 1
-        log(f"    OK — status '{status}' set for '{name}' ({count} done so far)")
-
-    return count
+    log(f"  Bulk '{status}': {confirmed}/{len(matched)} verified.")
+    if stragglers:
+        log(f"  Cleaning up {len(stragglers)} straggler(s) per-row ...")
+        confirmed += _set_status_per_row(page, stragglers, status, contact=contact)
+    return confirmed
 
 
 def _dismiss_error_popups(page):

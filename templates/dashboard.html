@@ -624,22 +624,30 @@ function renderTable() {
 function renderSummary() {
   const box = document.getElementById("summary-box");
 
-  // Find attraction name from the first angel-flagged film
+  // Find attraction name: prefer Comscore-confirmed angel film, fall back to booking attraction field
   let attraction = "";
   for (const t of ALL_THEATRES) {
     const af = (t.films || []).find(f => f.is_angel);
     if (af) { attraction = af.title; break; }
   }
+  if (!attraction) {
+    for (const t of ALL_THEATRES) {
+      if (t.attraction) { attraction = t.attraction; break; }
+    }
+  }
   if (!attraction) { box.innerHTML = ""; return; }
 
   const rows = ALL_THEATRES
-    .filter(t => t.status === "ok")
+    .filter(t => (t.booking_action || "").toLowerCase().includes("final"))
     .map(t => {
       const af = (t.films || []).find(f => f.is_angel);
-      if (!af) return null;
-      return { theatre: t.theatre || t.ml_venue, rank: af.rank, titles: t.films.length, gross: af.gross };
-    })
-    .filter(Boolean);
+      return {
+        theatre: t.theatre || t.ml_venue,
+        rank:    af ? af.rank  : "-",
+        titles:  af ? t.films.length : "-",
+        gross:   af ? af.gross : 0,
+      };
+    });
 
   if (!rows.length) { box.innerHTML = ""; return; }
 
