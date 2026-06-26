@@ -99,7 +99,7 @@
     <div class="panel">
       <h2>What the flags mean</h2>
       <div style="font-size:0.84rem; line-height:1.85; color:var(--mut);">
-        <div><span class="pill f-no_show">No-show</span> &nbsp;Agreed, venue known, <b>0</b> showtimes, no explaining tag</div>
+        <div><span class="pill f-no_show">No-show</span> &nbsp;Committed, venue known, <b>0</b> showtimes, no explaining tag</div>
         <div><span class="pill f-under">Under</span> &nbsp;Scheduling, but &le;3 days or &le;10 showtimes</div>
         <div><span class="pill f-on_track">On track</span> &nbsp;Full slate for a Clean commitment</div>
         <div><span class="pill f-expected">Expected</span> &nbsp;0 showtimes, but a tag explains it</div>
@@ -181,7 +181,7 @@ function render(){
   STCACHE = {};
   const k=DATA.kpis;
   $('#kpis').innerHTML = [
-    ['Agreed venues', fmt(k.agreed), 'var(--txt)'],
+    ['Committed venues', fmt(k.agreed), 'var(--txt)'],
     ['Scheduled', fmt(k.scheduled)+' · '+k.scheduled_pct+'%', 'var(--green)'],
     ['No-shows', fmt(k.no_show), 'var(--red)'],
     ['Under-running', fmt(k.under), 'var(--amber)'],

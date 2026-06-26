@@ -173,7 +173,7 @@ def fetch_coverage(slug, start, end):
               AND DATE(import_date)=(SELECT MAX(DATE(import_date))
                                      FROM RAW_AIRBYTE.ORACLE_SERVICE.IMPORTED_MICA_REPORT
                                      WHERE production=%(slug)s)
-              AND status='Agreed'
+              AND status IN ('Agreed','Booked')
             QUALIFY ROW_NUMBER() OVER (PARTITION BY venue_name ORDER BY import_date DESC)=1
         """, {"slug": slug})
         mica = [dict(venue=r[0], atom=r[1], playtype=r[2], screens=r[3],
