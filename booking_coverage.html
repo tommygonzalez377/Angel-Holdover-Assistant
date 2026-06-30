@@ -100,10 +100,11 @@
       <h2>What the flags mean</h2>
       <div style="font-size:0.84rem; line-height:1.85; color:var(--mut);">
         <div><span class="pill f-no_show">No-show</span> &nbsp;Committed, venue known, <b>0</b> showtimes, no explaining tag</div>
-        <div><span class="pill f-under">Under</span> &nbsp;Scheduling, but &le;3 days or &le;10 showtimes</div>
-        <div><span class="pill f-on_track">On track</span> &nbsp;Full slate for a Clean commitment</div>
+        <div><span class="pill f-under">Under</span> &nbsp;Scheduling, but missing matinee or prime on a play-day</div>
+        <div><span class="pill f-on_track">On track</span> &nbsp;Matinee + prime every play-day (Clean)</div>
         <div><span class="pill f-expected">Expected</span> &nbsp;0 showtimes, but a tag explains it</div>
         <div><span class="pill f-unresolved">Unresolved</span> &nbsp;Venue not matched — can't confirm</div>
+        <div style="margin-top:8px; color:var(--dim); font-size:0.78rem;">Showstarts (M·P·L) — Matinee 7a–4p · Prime 4p–10p · Late 10p+</div>
       </div>
     </div>
     <div class="panel">
@@ -140,7 +141,7 @@
     </div>
     <table>
       <thead><tr><th>Venue</th><th>City</th><th>State</th><th>Booker</th><th>Buyer</th><th>Playtype</th><th class="r">Screens</th>
-        <th class="r">Showtimes</th><th class="r">Days</th><th class="r">Flag</th><th>Tags</th></tr></thead>
+        <th class="r">Showtimes</th><th class="r" title="Matinee · Prime · Late showstarts">M·P·L</th><th class="r">Days</th><th class="r">Flag</th><th>Tags</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
   </div>
@@ -215,9 +216,9 @@ function renderRows(){
     const buyer = v.buyer ? (v.buyer_email ? `<span title="${esc(v.buyer_email)}">${v.buyer}</span>` : v.buyer) : '';
     return `<tr class="${exp?'expandable':''}" data-pvid="${esc(v.pvid)}">
     <td>${caret} ${v.venue||''}</td><td>${v.city||''}</td><td>${v.state||''}</td><td>${v.booker||''}</td><td>${buyer}</td><td>${v.playtype||''}</td>
-    <td class="r">${v.screens??''}</td><td class="r">${v.showtimes}</td><td class="r">${v.days}</td>
+    <td class="r">${v.screens??''}</td><td class="r">${v.showtimes}</td><td class="r" style="white-space:nowrap;">${v.matinee||0}·${v.prime||0}·${v.late||0}</td><td class="r">${v.days}</td>
     <td class="r"><span class="pill f-${v.flag}">${lbl[v.flag]}</span></td><td>${tags}</td></tr>`;
-  }).join('') || '<tr><td colspan="11" class="empty">No venues match.</td></tr>';
+  }).join('') || '<tr><td colspan="12" class="empty">No venues match.</td></tr>';
 }
 function renderDays(days){
   if(!days || !days.length) return '<div class="dl">No showtimes in window.</div>';
@@ -234,7 +235,7 @@ async function toggleDetail(tr){
   }
   const slug=$('#title').value, start=$('#start').value, end=$('#end').value;
   const detail=document.createElement('tr'); detail.className='detail';
-  const td=document.createElement('td'); td.colSpan=11; td.innerHTML='<div class="dl">Loading showtimes…</div>';
+  const td=document.createElement('td'); td.colSpan=12; td.innerHTML='<div class="dl">Loading showtimes…</div>';
   detail.appendChild(td); tr.after(detail); if(caret) caret.textContent='▾';
   try{
     let days = STCACHE[pvid];

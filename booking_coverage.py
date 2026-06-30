@@ -49,9 +49,8 @@ def _norm(s):
 
 
 def _connect():
-    """Connect via key-pair (preferred for the deployed/server use — set
-    SNOWFLAKE_PRIVATE_KEY_B64 = base64 of a PKCS8 PEM key) or, if no key is
-    present, fall back to a PAT in SNOWFLAKE_PAT (used for local dev)."""
+    """Connect via key-pair (SNOWFLAKE_PRIVATE_KEY_B64 / _PATH) if present, else a
+    PAT in SNOWFLAKE_PAT. Honors SNOWFLAKE_HOST for the load-balanced endpoint."""
     base = dict(
         account=os.environ.get("SNOWFLAKE_ACCOUNT", "RIDEDVP-ANGEL"),
         user=os.environ.get("SNOWFLAKE_USER", "tommy.gonzalez@angel.com"),
@@ -181,19 +180,38 @@ def fetch_coverage(slug, start, end):
                      city=r[8], state=r[9])
                 for r in cur.fetchall()]
 
-        # actual showtimes aggregated by provider_venue_id (NOT by name — a single
-        # provider_venue_id can have multiple venue rows; grouping by name undercounts)
+        # actual showtimes aggregated by provider_venue_id, with per-day daypart
+        # coverage. Dayparts (by local start hour): matinee 7:00am-3:59pm,
+        # prime 4:00pm-9:59pm, late 10:00pm+. A day is "clean" when it has both a
+        # matinee AND a prime showstart. Aggregate by pvid (not name) to avoid the
+        # stale-duplicate-venue undercount.
         cur.execute("""
-            SELECT CAST(v.provider_venue_id AS STRING) AS pvid,
-                   COUNT(*) AS st, COUNT(DISTINCT DATE(s.local_start_time)) AS days
-            FROM RAW_AIRBYTE.THEATRICAL_MONOLITH.SHOWTIMES s
-            JOIN RAW_AIRBYTE.THEATRICAL_MONOLITH.VENUES v      ON v.id = s.venue_id
-            JOIN RAW_AIRBYTE.THEATRICAL_MONOLITH.PRODUCTIONS p ON p.id = s.production_id
-            WHERE p.theatrical_slug=%(slug)s AND v.provider_venue_id IS NOT NULL
-              AND DATE(s.local_start_time) BETWEEN %(start)s AND %(end)s
-            GROUP BY 1
+            WITH daily AS (
+              SELECT CAST(v.provider_venue_id AS STRING) AS pvid,
+                     DATE(s.local_start_time) AS d,
+                     COUNT_IF(HOUR(s.local_start_time) BETWEEN 7 AND 15)  AS mat,
+                     COUNT_IF(HOUR(s.local_start_time) BETWEEN 16 AND 21) AS prime,
+                     COUNT_IF(HOUR(s.local_start_time) >= 22 OR HOUR(s.local_start_time) < 7) AS late
+              FROM RAW_AIRBYTE.THEATRICAL_MONOLITH.SHOWTIMES s
+              JOIN RAW_AIRBYTE.THEATRICAL_MONOLITH.VENUES v      ON v.id = s.venue_id
+              JOIN RAW_AIRBYTE.THEATRICAL_MONOLITH.PRODUCTIONS p ON p.id = s.production_id
+              WHERE p.theatrical_slug=%(slug)s AND v.provider_venue_id IS NOT NULL
+                AND DATE(s.local_start_time) BETWEEN %(start)s AND %(end)s
+              GROUP BY 1, 2
+            )
+            SELECT pvid,
+                   SUM(mat + prime + late) AS st,
+                   COUNT(*) AS days,
+                   SUM(IFF(mat > 0 AND prime > 0, 1, 0)) AS clean_days,
+                   SUM(IFF(mat > 0, 1, 0)) AS mat_days,
+                   SUM(mat) AS mat, SUM(prime) AS prime, SUM(late) AS late
+            FROM daily GROUP BY pvid
         """, {"slug": slug, "start": start, "end": end})
-        st_by_pvid = {pid: (st, days) for pid, st, days in cur.fetchall()}
+        st_by_pvid = {}
+        for pid, st, days, clean_days, mat_days, mat, prime, late in cur.fetchall():
+            st_by_pvid[pid] = {"st": int(st), "days": int(days), "clean_days": int(clean_days),
+                               "mat_days": int(mat_days), "mat": int(mat),
+                               "prime": int(prime), "late": int(late)}
 
         # normalized venue name -> provider_venue_id, for venues that have showtimes
         # (fallback when a Mica venue doesn't resolve through ORACLEV3)
@@ -209,36 +227,39 @@ def fetch_coverage(slug, start, end):
         for name, pid in cur.fetchall():
             name_to_pid.setdefault(_norm(name), pid)
 
-    def resolve(m):
-        pid = (ov_name.get(_norm(m["venue"]))
-               or (ov_atom.get(str(m["atom"])) if m["atom"] else None)
-               or name_to_pid.get(_norm(m["venue"])))
-        if pid is None:
-            return None, None, None          # couldn't resolve venue at all
-        if pid in st_by_pvid:
-            st, days = st_by_pvid[pid]
-            return st, days, pid
-        return 0, 0, pid                      # known venue, zero showtimes -> no-show
+    def resolve_pid(m):
+        return (ov_name.get(_norm(m["venue"]))
+                or (ov_atom.get(str(m["atom"])) if m["atom"] else None)
+                or name_to_pid.get(_norm(m["venue"])))
+
+    ZERO = {"st": 0, "days": 0, "clean_days": 0, "mat_days": 0, "mat": 0, "prime": 0, "late": 0}
 
     venues = []
     for m in mica:
-        st, days, pid = resolve(m)
-        if st is None:
-            flag = "unresolved"
-        elif st == 0:
-            flag = "no_show"
-        elif days <= UNDER_DAYS or st <= UNDER_SHOWTIMES:
-            flag = "under"
+        pid = resolve_pid(m)
+        if pid is None:
+            s, flag = ZERO, "unresolved"            # venue not matched — can't confirm
         else:
-            flag = "on_track"
+            s = st_by_pvid.get(pid)
+            if s is None:
+                s, flag = ZERO, "no_show"           # known venue, zero showtimes
+            else:
+                # "Clean" = matinee + prime EVERY play-day. "Single Matinee" = a
+                # matinee every play-day. Anything scheduling but short of that = under.
+                pt = (m["playtype"] or "").strip().lower()
+                if pt == "single matinee":
+                    flag = "on_track" if s["mat_days"] == s["days"] else "under"
+                else:
+                    flag = "on_track" if s["clean_days"] == s["days"] else "under"
         booker = re.sub(r"\s+", " ", m["booker"]).strip() if m["booker"] else "(unassigned)"
         venues.append({
             "venue": m["venue"], "city": (m["city"] or "").strip(), "state": (m["state"] or "").strip(),
             "booker": booker,
             "buyer": (m["buyer"] or "").strip(), "buyer_email": (m["buyer_email"] or "").strip(),
             "playtype": m["playtype"] or "", "screens": m["screens"],
-            "status": m["status"], "showtimes": st or 0,
-            "days": days or 0, "flag": flag, "pvid": pid,
+            "status": m["status"], "showtimes": s["st"], "days": s["days"],
+            "matinee": s["mat"], "prime": s["prime"], "late": s["late"],
+            "flag": flag, "pvid": pid,
         })
 
     # --- enrich with venue tags (provider_venue_id -> monolith UUID -> tags) ---
@@ -424,19 +445,20 @@ def build_xlsx(slug, start, end, flag=None, booker=None, q=None):
 
     ws = wb.create_sheet("Venues")
     headers = ["Venue", "City", "State", "Booker", "Buyer", "Buyer Email", "Playtype",
-               "Screens", "Showtimes", "Days", "Status", "Tags"]
+               "Screens", "Showtimes", "Days", "Matinee", "Prime", "Late", "Status", "Tags"]
     ws.append(headers)
     for v in rows:
         ws.append([v.get("venue", ""), v.get("city", ""), v.get("state", ""),
                    v.get("booker", ""), v.get("buyer", ""), v.get("buyer_email", ""),
                    v.get("playtype", ""), v.get("screens"), v.get("showtimes"),
-                   v.get("days"), _FLAG_LABEL.get(v["flag"], v["flag"]),
+                   v.get("days"), v.get("matinee", 0), v.get("prime", 0), v.get("late", 0),
+                   _FLAG_LABEL.get(v["flag"], v["flag"]),
                    ", ".join(v.get("tags", []))])
     for cell in ws[1]:
         cell.font = Font(bold=True)
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-    for i, w in enumerate([34, 16, 8, 20, 20, 26, 12, 9, 11, 7, 12, 28], 1):
+    for i, w in enumerate([34, 16, 8, 20, 20, 26, 12, 9, 11, 7, 8, 8, 8, 12, 28], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     buf = io.BytesIO()
